@@ -46,7 +46,8 @@ docs/APP_REVIEW_NOTES.md  App Review açıklamaları
 server/                   Go 1.24 sunucu: cmd/kilitd, cmd/vectors, cmd/wmdecode, pkg/kilitcrypto, internal/*
                           Dockerfile, docker-compose.yml, Caddyfile, Makefile (hepsi server/ içinde)
 ios/                      Xcode 16 projesi (elle yazılmış pbxproj), XcodeGen yedeği, Kilit/Sources, Kilit/Tests
-.github/workflows/        server.yml (vet, test, race, vektör altın dosyası), ios-lint.yml (Linux doğrulayıcılar)
+.github/workflows/        server.yml (vet, test, race, vektör altın dosyası), ios-lint.yml (Linux doğrulayıcılar),
+                          ios-build.yml (macOS + Xcode 16: derleme ve KilitTests, simülatörde)
 ```
 
 ## Sunucu — hızlı başlangıç (Linux)
