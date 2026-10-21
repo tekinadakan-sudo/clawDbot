@@ -7,6 +7,7 @@
 //  capture banner and the opaque replacement shown while the screen is shared.
 
 import SwiftUI
+import UIKit
 
 enum ProtectionState: Equatable {
     case green

@@ -152,7 +152,7 @@ enum QRCode {
         var z: Int = 0
         var i: Int = 7
         while i >= 0 {
-            z = (z << 1) ^ ((z >> 8) * 0x11D)
+            z = (z << 1) ^ ((z >> 7) * 0x11D)
             z ^= ((Int(y) >> i) & 1) * Int(x)
             i -= 1
         }
@@ -256,10 +256,10 @@ enum QRCode {
         let total: Int = data.count * 8
         var right: Int = size - 1
         while right >= 1 {
-            let column: Int = right == 6 ? 5 : right
+            if right == 6 { right = 5 }                  // skip the timing column for good
             for vert in 0..<size {
                 for j in 0..<2 {
-                    let x: Int = column - j
+                    let x: Int = right - j
                     let upward: Bool = ((right + 1) & 2) == 0
                     let y: Int = upward ? size - 1 - vert : vert
                     if !function[y][x] && i < total {

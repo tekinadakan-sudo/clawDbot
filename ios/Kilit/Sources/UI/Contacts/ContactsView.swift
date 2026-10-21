@@ -234,3 +234,61 @@ struct AddContactSheet: View {
         }
     }
 }
+
+// MARK: - Contact operations the UI needs (actor-isolated, same module)
+
+extension MessageSync {
+    /// Add by username: `GET /v1/users/{name}`, verify the binding, store an accepted contact.
+    func addContact(username name: String) async throws {
+        guard store.isOpen else { throw SyncError.notOpen }
+        let user: UserResponse = try await api.lookup(username: name)
+        try user.verifyBinding()
+        let now: UInt64 = clock.now
+        var record: ContactRecord = store.index.contact(name)
+            ?? ContactRecord(username: name, identity: user.identity, verified: false, accepted: true)
+        if record.identity != user.identity {
+            // Key change detected on fetch: banner, sending disabled until accepted.
+            let pending: IdentityPublicKeys = user.identity
+            try store.commitIndex { idx in
+                let i: Int = idx.conversationIndex(name, now: now)
+                idx.conversations[i].pendingKeyChange = pending
+            }
+            emit(.keyChangeDetected(peer: name))
+            return
+        }
+        record.accepted = true
+        record.blocked = false
+        let updated: ContactRecord = record
+        try store.commitIndex { idx in
+            idx.upsertContact(updated)
+            _ = idx.conversationIndex(name, now: now)
+        }
+        emit(.contactsChanged)
+    }
+
+    /// Message request: "Kabul et" / "Engelle".
+    func setContactFlags(peer: String, accepted: Bool, blocked: Bool) throws {
+        guard store.isOpen else { throw SyncError.notOpen }
+        guard var record = store.index.contact(peer) else { throw SyncError.unknownContact(peer) }
+        record.accepted = accepted
+        record.blocked = blocked
+        let updated: ContactRecord = record
+        try store.commitIndex { idx in idx.upsertContact(updated) }
+        emit(.contactsChanged)
+        if accepted {
+            Task { [weak self] in
+                await self?.pumpOutbox()
+            }
+        }
+    }
+
+    /// "Doğrulandı" after comparing safety numbers.
+    func setVerified(peer: String, verified: Bool) throws {
+        guard store.isOpen else { throw SyncError.notOpen }
+        guard var record = store.index.contact(peer) else { throw SyncError.unknownContact(peer) }
+        record.verified = verified
+        let updated: ContactRecord = record
+        try store.commitIndex { idx in idx.upsertContact(updated) }
+        emit(.contactsChanged)
+    }
+}
