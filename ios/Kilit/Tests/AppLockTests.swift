@@ -66,7 +66,7 @@ final class AppLockTests: XCTestCase {
         lock.handleScenePhase(.inactive)
         lock.handleScenePhase(.active)
         XCTAssertEqual(lock.state, .authenticating)
-        XCTAssertEqual(auth.prompts, 1)
+        XCTAssertEqual(lock.promptCount, 1)              // the prompt Task may not have run yet
         await lock.authenticationTask?.value
         XCTAssertEqual(lock.state, .unlocked)
         XCTAssertEqual(auth.prompts, 1)
@@ -87,9 +87,10 @@ final class AppLockTests: XCTestCase {
         lock.handleScenePhase(.inactive)
         lock.handleScenePhase(.active)
         XCTAssertEqual(lock.state, .authenticating)
-        XCTAssertEqual(auth.prompts, 2)
+        XCTAssertEqual(lock.promptCount, 2)              // the prompt Task may not have run yet
         await lock.authenticationTask?.value
         XCTAssertEqual(lock.state, .unlocked)
+        XCTAssertEqual(auth.prompts, 2)
     }
 
     @MainActor

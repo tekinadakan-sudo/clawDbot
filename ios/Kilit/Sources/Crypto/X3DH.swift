@@ -60,7 +60,13 @@ enum X3DH {
     static func dh(_ priv: Curve25519.KeyAgreement.PrivateKey, _ peerPub: Data) throws -> Data {
         guard peerPub.count == 32 else { throw KilitCryptoError.badKeyLength }
         let pub: Curve25519.KeyAgreement.PublicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerPub)
-        let shared: SharedSecret = try priv.sharedSecretFromKeyAgreement(with: pub)
+        let shared: SharedSecret
+        do {
+            shared = try priv.sharedSecretFromKeyAgreement(with: pub)
+        } catch {
+            // CryptoKit rejects a low-order peer key itself (all-zero output) before our check runs.
+            throw KilitCryptoError.lowOrderPoint
+        }
         let out: Data = shared.withUnsafeBytes { Data($0) }
         guard !Bytes.isAllZero(out) else { throw KilitCryptoError.lowOrderPoint }
         return out

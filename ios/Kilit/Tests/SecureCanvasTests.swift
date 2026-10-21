@@ -314,12 +314,19 @@ final class SecureCanvasTests: XCTestCase {
         owned.copyBytes(from: [UInt8](repeating: 0xAB, count: 64))
         try view.display(tiles.lighter, source: nil, decryptBuffer: owned)
         XCTAssertTrue((view.layer as? AVSampleBufferDisplayLayer)?.preventsCapture ?? false)
-        view.setWatermark(WatermarkLayers(lighter: tiles.lighter, darker: tiles.darker, phase: CGPoint(x: 10, y: 20)))
+        // The display layer owns private sublayers of its own; count relative to them.
+        let baseline: Int = view.layer.sublayers?.count ?? 0
+        let marks: WatermarkLayers = WatermarkLayers(lighter: tiles.lighter, darker: tiles.darker, phase: CGPoint(x: 10, y: 20))
+        view.setWatermark(marks)
         view.setNeedsLayout()
         view.layoutIfNeeded()
-        XCTAssertEqual(view.layer.sublayers?.count ?? 0, 2)
+        XCTAssertEqual(view.layer.sublayers?.count ?? 0, baseline + 2)
+        XCTAssertTrue(marks.lighterLayer.superlayer === view.layer)
+        let others: [CALayer] = (view.layer.sublayers ?? []).filter { $0 !== marks.lighterLayer && $0 !== marks.darkerLayer }
+        XCTAssertTrue(others.allSatisfy { $0.zPosition < marks.lighterLayer.zPosition }, "watermark must stay above the image")
         view.clear()                // scrubs + deallocates `owned`
         view.setWatermark(nil)
-        XCTAssertEqual(view.layer.sublayers?.count ?? 0, 0)
+        XCTAssertNil(marks.lighterLayer.superlayer)
+        XCTAssertNil(marks.darkerLayer.superlayer)
     }
 }

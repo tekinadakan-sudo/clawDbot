@@ -43,6 +43,10 @@ final class WatermarkLayers {
     func install(in parent: CALayer, displayScale: CGFloat) {
         parent.masksToBounds = true
         updateDisplayScale(displayScale)
+        // AVSampleBufferDisplayLayer keeps a private content sublayer of its own;
+        // a high zPosition keeps the mark above it whatever order layers are added in.
+        lighterLayer.zPosition = 1000
+        darkerLayer.zPosition = 1001
         parent.addSublayer(lighterLayer)
         parent.addSublayer(darkerLayer)
     }
