@@ -21,150 +21,6 @@ enum InboundReason: String, Codable, Equatable {
     case stored
 }
 
-enum ParkReason: String, Codable, Equatable {
-    case keyChange = "key_change"
-    case unknownSid = "unknown_sid"
-    case lookupDeferred = "lookup_deferred"
-
-    var lifetime: UInt64 {
-        switch self {
-        case .keyChange: return 7 * 86400
-        case .unknownSid, .lookupDeferred: return 24 * 3600
-        }
-    }
-
-    var expiryReason: InboundReason {
-        switch self {
-        case .keyChange: return .keyChangeExpired
-        case .unknownSid: return .unknownSid
-        case .lookupDeferred: return .lookupFailed
-        }
-    }
-}
-
-struct ParkedEnvelope: Codable, Equatable {
-    let msgId: String
-    let kind: EnvelopeKind
-    let sid: Data
-    let envelope: Data
-    let receivedAt: UInt64
-    let reason: ParkReason
-
-    enum CodingKeys: String, CodingKey {
-        case msgId = "msg_id"
-        case kind, sid, envelope
-        case receivedAt = "received_at"
-        case reason
-    }
-}
-
-struct ProcessedId: Codable, Equatable {
-    let msgId: String
-    let at: UInt64
-
-    enum CodingKeys: String, CodingKey {
-        case msgId = "msg_id"
-        case at
-    }
-}
-
-enum MessageAuthor: String, Codable, Equatable {
-    case me
-    case peer
-}
-
-struct DedupeEntry: Codable, Equatable {
-    let author: MessageAuthor
-    let id: String
-    let at: UInt64
-}
-
-/// The policy-relevant part of `conv/<peer>.json`: outer dedupe, parked envelopes, inner `(author, id)` dedupe.
-struct ConversationState: Codable, Equatable {
-    static let processedMax: Int = 10_000
-    static let processedTTL: UInt64 = 30 * 86400
-    static let dedupeMax: Int = 10_000
-    static let dedupeTTL: UInt64 = 45 * 86400
-    static let parkedMax: Int = 100
-
-    var processedMsgIds: [ProcessedId]
-    var parked: [ParkedEnvelope]
-    var seenMessageIds: [DedupeEntry]
-
-    enum CodingKeys: String, CodingKey {
-        case processedMsgIds = "processed_msg_ids"
-        case parked
-        case seenMessageIds = "seen_message_ids"
-    }
-
-    init() {
-        processedMsgIds = []
-        parked = []
-        seenMessageIds = []
-    }
-
-    func isProcessed(msgId: String) -> Bool {
-        processedMsgIds.contains { $0.msgId == msgId }
-    }
-
-    mutating func markProcessed(msgId: String, now: UInt64) {
-        processedMsgIds.removeAll { $0.msgId == msgId || (now > $0.at && now - $0.at > ConversationState.processedTTL) }
-        processedMsgIds.append(ProcessedId(msgId: msgId, at: now))
-        if processedMsgIds.count > ConversationState.processedMax {
-            processedMsgIds.removeFirst(processedMsgIds.count - ConversationState.processedMax)
-        }
-    }
-
-    func isKnownMessage(author: MessageAuthor, id: String) -> Bool {
-        seenMessageIds.contains { $0.author == author && $0.id == id }
-    }
-
-    /// Records `(author, id)`; returns false when it was already known (duplicate).
-    mutating func rememberMessage(author: MessageAuthor, id: String, now: UInt64) -> Bool {
-        if isKnownMessage(author: author, id: id) { return false }
-        seenMessageIds.removeAll { now > $0.at && now - $0.at > ConversationState.dedupeTTL }
-        seenMessageIds.append(DedupeEntry(author: author, id: id, at: now))
-        if seenMessageIds.count > ConversationState.dedupeMax {
-            seenMessageIds.removeFirst(seenMessageIds.count - ConversationState.dedupeMax)
-        }
-        return true
-    }
-
-    /// Parks an envelope; returns the oldest one when the 100-per-peer bound evicted it (`parked_overflow`).
-    mutating func park(_ envelope: ParkedEnvelope) -> ParkedEnvelope? {
-        parked.removeAll { $0.msgId == envelope.msgId }
-        parked.append(envelope)
-        if parked.count > ConversationState.parkedMax {
-            return parked.removeFirst()
-        }
-        return nil
-    }
-
-    @discardableResult
-    mutating func unpark(msgId: String) -> ParkedEnvelope? {
-        guard let i = parked.firstIndex(where: { $0.msgId == msgId }) else { return nil }
-        return parked.remove(at: i)
-    }
-
-    func parked(sid: Data) -> [ParkedEnvelope] {
-        parked.filter { $0.sid == sid }
-    }
-
-    func parked(reason: ParkReason) -> [ParkedEnvelope] {
-        parked.filter { $0.reason == reason }
-    }
-
-    /// Removes expired parked envelopes and returns them with the reason they are classified under.
-    mutating func expireParked(now: UInt64) -> [(envelope: ParkedEnvelope, reason: InboundReason)] {
-        var out: [(envelope: ParkedEnvelope, reason: InboundReason)] = []
-        for p in parked where now > p.receivedAt && now - p.receivedAt > p.reason.lifetime {
-            out.append((p, p.reason.expiryReason))
-        }
-        parked.removeAll { p in now > p.receivedAt && now - p.receivedAt > p.reason.lifetime }
-        return out
-    }
-}
-
 // MARK: - Inputs
 
 /// Injected `GET /v1/users/{from}` answer for the trust-on-first-use lookup.
@@ -296,27 +152,41 @@ enum Inbound {
             InboundResult(outcome: outcome, sessions: sessions, conversation: conversation, contact: contact, actions: actions)
         }
 
+        /// Step 4 (Go `classify`): the outer id is recorded as processed, then the ack is appended.
         mutating func classify(_ reason: InboundReason) -> InboundResult {
+            conversation.markProcessed(msgId: input.msgId, now: now)
             actions.append(.ack(msgId: input.msgId, reason: reason))
             return result(.classified(reason))
         }
 
         mutating func park(_ reason: ParkReason, _ parsed: ParsedEnvelope) -> InboundResult {
+            parkEntry(reason, parsed)
+            return result(.parked(reason))
+        }
+
+        /// Parks the current envelope. A `parked_overflow` victim is classified like Go does: its id is
+        /// recorded as processed and it is acked with `.parkedOverflow` (the caller writes its system row).
+        mutating func parkEntry(_ reason: ParkReason, _ parsed: ParsedEnvelope) {
             let p: ParkedEnvelope = ParkedEnvelope(msgId: input.msgId, kind: parsed.outer.kind, sid: parsed.sid,
                                                    envelope: input.envelope, receivedAt: now, reason: reason)
             if let victim = conversation.park(p) {
+                conversation.markProcessed(msgId: victim.msgId, now: now)
                 actions.append(.ack(msgId: victim.msgId, reason: .parkedOverflow))
             }
-            return result(.parked(reason))
         }
     }
 
     static func process(_ input: InboundInput) -> InboundResult {
         var ctx: Context = Context(input)
         // Step 0: outer dedupe before any KDF.
-        if ctx.conversation.isProcessed(msgId: input.msgId) {
+        if ctx.conversation.isProcessed(msgId: input.msgId, now: input.now) {
             ctx.actions.append(.ack(msgId: input.msgId, reason: .alreadyProcessed))
             return ctx.result(.alreadyProcessed)
+        }
+        // The same row delivered again (WS + poll) while it is parked: no state change, never acked
+        // while parked (Go `ActIgnored`). A parked re-run unparks before calling `process`.
+        if let p = ctx.conversation.isParked(msgId: input.msgId) {
+            return ctx.result(.parked(p.reason))
         }
         // Step 1: parse and reject before any KDF.
         let parsed: ParsedEnvelope
@@ -398,7 +268,8 @@ enum Inbound {
         } catch {
             return ctx.classify(.decryptFailed)
         }
-        guard let inner = parseInner(plaintext) else { return ctx.classify(.badEnvelope) }
+        // Unpad / inner-JSON failures after a successful decrypt are `decrypt_failed` (Go `decryptReason`).
+        guard let inner = parseInner(plaintext) else { return ctx.classify(.decryptFailed) }
         var session: Session = Session(sid: parsed.sid, role: .responder, createdAt: ctx.now, ws: shared.ws, ad: shared.ad,
                                        localIdentity: ctx.input.local.publicKeys, peerIdentity: peerIdentity,
                                        state: advanced, pendingX3DH: nil)
@@ -417,8 +288,8 @@ enum Inbound {
     private static func rejected(_ ctx: inout Context, _ parsed: ParsedEnvelope, _ reason: InboundReason) -> InboundResult {
         if let c = ctx.contact, c.accepted,
            ctx.sessions.session(sid: parsed.sid) == nil,
-           ctx.sessions.knownSid(parsed.sid) == nil,
-           ctx.sessions.gateRejectedInitiationRecovery(now: ctx.now) {
+           ctx.sessions.knownSid(parsed.sid, now: ctx.now) == nil,
+           ctx.sessions.gateRecovery(now: ctx.now) {
             ctx.sessions.rememberDeleted(sid: parsed.sid, reason: .rejectedInitiation, now: ctx.now)
             ctx.actions.append(.initiateRecovery(lostSid: parsed.sid, trigger: .rejectedInitiation))
         }
@@ -429,11 +300,13 @@ enum Inbound {
         if let session = ctx.sessions.session(sid: parsed.sid) {
             return decryptOn(&ctx, session: session, parsed: parsed)
         }
-        if let known = ctx.sessions.knownSid(parsed.sid), known.deletedReason.triggersS3,
-           ctx.sessions.gateS3Recovery(now: ctx.now) {
+        // Go order: park first, then the S3 trigger under the shared per-peer bound.
+        ctx.parkEntry(.unknownSid, parsed)
+        if let known = ctx.sessions.knownSid(parsed.sid, now: ctx.now), known.deletedReason.triggersS3,
+           ctx.sessions.gateRecovery(now: ctx.now) {
             ctx.actions.append(.initiateRecovery(lostSid: parsed.sid, trigger: .s3))
         }
-        return ctx.park(.unknownSid, parsed)
+        return ctx.result(.parked(.unknownSid))
     }
 
     private static func decryptOn(_ ctx: inout Context, session: Session, parsed: ParsedEnvelope) -> InboundResult {
@@ -449,7 +322,7 @@ enum Inbound {
         } catch {
             return ctx.classify(.decryptFailed)
         }
-        guard let inner = parseInner(plaintext) else { return ctx.classify(.badEnvelope) }
+        guard let inner = parseInner(plaintext) else { return ctx.classify(.decryptFailed) }
         ctx.sessions.commitDecrypt(sid: session.sid, state: advanced, now: ctx.now)
         return store(&ctx, inner: inner, sid: session.sid)
     }

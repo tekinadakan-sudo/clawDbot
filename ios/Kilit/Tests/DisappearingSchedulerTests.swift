@@ -54,6 +54,7 @@ final class DisappearingSchedulerTests: XCTestCase {
         XCTAssertEqual(mine.expiresAt, t0 + 65)
     }
 
+    @MainActor
     func testTtlZeroNeverExpires() {
         var peer: Message = peerMessage(id: "p", ttl: 0, receivedAt: t0)
         XCTAssertNil(peer.expiresAt)
@@ -68,6 +69,7 @@ final class DisappearingSchedulerTests: XCTestCase {
         XCTAssertTrue(DisappearingScheduler.expired([peer, mine, system], now: t0 + 400 * day).isEmpty)
     }
 
+    @MainActor
     func testPurgeOrderEarliestDeadlineFirstThenId() {
         var a: Message = peerMessage(id: "a", ttl: 30, receivedAt: t0)
         a.markRevealed(at: t0 + 100)                       // expires t0 + 130

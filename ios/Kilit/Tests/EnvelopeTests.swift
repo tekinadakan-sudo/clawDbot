@@ -33,7 +33,8 @@ final class EnvelopeTests: XCTestCase {
         var missing: Data = Data(repeating: 0, count: 256)
         missing[missing.startIndex] = 0x41
         XCTAssertThrowsError(try Padding.unpad(missing))
-        XCTAssertThrowsError(try Padding.unpad(Data(repeating: 0, count: 255) + Data([0x80])))
+        // 255 zero bytes + 0x80 is valid padding of a 255-byte all-zero payload.
+        XCTAssertEqual(try Padding.unpad(Data(repeating: 0, count: 255) + Data([0x80])), Data(repeating: 0, count: 255))
         var notMultiple: Data = Data(repeating: 0, count: 300)
         notMultiple[notMultiple.startIndex] = 0x80
         XCTAssertThrowsError(try Padding.unpad(notMultiple)) { e in

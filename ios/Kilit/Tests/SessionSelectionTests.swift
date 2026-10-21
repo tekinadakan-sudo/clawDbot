@@ -450,7 +450,7 @@ final class SessionSelectionTests: XCTestCase {
         }
         sent.append(OwnSentMessage(id: "old", sid: lost, sentAt: 1))
         sent.append(OwnSentMessage(id: "other", sid: Data(repeating: 2, count: 8), sentAt: 1050))
-        let out: [OwnSentMessage] = SessionOutbound.resendCandidates(sent: sent, lostSid: lost, now: 1000 + 8 * 86400)
+        let out: [OwnSentMessage] = SessionOutbound.resendCandidates(sent: sent, lostSid: lost, now: 7 * 86400 + 500)
         XCTAssertEqual(out.count, 50)
         XCTAssertEqual(out.first?.id, "m59", "oldest first")
         XCTAssertFalse(out.contains { $0.id == "old" || $0.id == "other" })

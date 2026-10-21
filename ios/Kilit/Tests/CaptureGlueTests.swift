@@ -167,6 +167,7 @@ final class CaptureGlueTests: XCTestCase {
         XCTAssertEqual(glue.seq["alice"], 1)
     }
 
+    @MainActor
     func testWireConversions() {
         XCTAssertEqual(CaptureGlue.wireKind("recording_started"), .recordingStarted)
         XCTAssertEqual(CaptureGlue.wireKind("blanking_unavailable"), .blankingUnavailable)
@@ -178,6 +179,7 @@ final class CaptureGlueTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testGapRenderingFromLastPeerCaptureSeq() {
         XCTAssertFalse(CaptureGlue.hasGap(lastPeerCaptureSeq: nil, seqFrom: 1))
         XCTAssertTrue(CaptureGlue.hasGap(lastPeerCaptureSeq: nil, seqFrom: 2))
