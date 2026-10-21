@@ -101,6 +101,11 @@ final class ConversationModel {
                 break
             }
         }
+        if let e = error as? AttachmentUploadError, case .quotaExceeded(let retryAfter) = e {
+            let seconds: Int = Int(min(retryAfter, 3600))
+            return String(localized: "error.attachment_quota",
+                          defaultValue: "Ek depolama alanı dolu (sende ya da karşı tarafta). \(seconds) sn sonra tekrar dene.")
+        }
         if error is ImageNormalizerError {
             return String(localized: "error.image", defaultValue: "Fotoğraf işlenemedi")
         }

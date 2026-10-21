@@ -148,9 +148,8 @@ final class ScenarioRunner {
         side.pendingRollback = []
         for sid in rollbacks where side.sessions.session(sid: sid) != nil {
             side.sessions.deleteSession(sid: sid, reason: .rollback, now: now)
-            if side.sessions.gateS3Recovery(now: now) {
-                try recover(side, lostSid: sid)
-            }
+            side.sessions.stampRecovery(now: now)
+            try recover(side, lostSid: sid)
         }
     }
 
@@ -409,8 +408,9 @@ final class SessionSelectionTests: XCTestCase {
         XCTAssertTrue(p.gateS3Recovery(now: 1000))
         XCTAssertFalse(p.gateS3Recovery(now: 1000 + 599))
         XCTAssertTrue(p.gateS3Recovery(now: 1000 + 600))
-        XCTAssertTrue(p.gateRejectedInitiationRecovery(now: 1000))
-        XCTAssertFalse(p.gateRejectedInitiationRecovery(now: 1500))
+        XCTAssertFalse(p.gateRejectedInitiationRecovery(now: 1600 + 599), "shared with S3")
+        XCTAssertTrue(p.gateRejectedInitiationRecovery(now: 1600 + 600))
+        XCTAssertFalse(p.gateS3Recovery(now: 1000), "a clock that went backwards keeps the bound closed (Go)")
         // ctrl.resync supersedes a session without lastActivity.
         p.addSession(session(sid: 0x04, role: .initiator, createdAt: 4, lastActivity: nil))
         XCTAssertTrue(p.supersede(lostSid: Data(repeating: 0x04, count: 8)))

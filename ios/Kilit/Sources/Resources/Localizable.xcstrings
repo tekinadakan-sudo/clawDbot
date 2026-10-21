@@ -784,6 +784,23 @@
         }
       }
     },
+    "conversation.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henüz mesaj yok"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No messages yet"
+          }
+        }
+      }
+    },
     "delete.both": {
       "extractionState": "manual",
       "localizations": {
@@ -1103,6 +1120,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Watermark"
+          }
+        }
+      }
+    },
+    "error.attachment_quota": {
+      "extractionState": "manual",
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ek depolama alanı dolu (sende ya da karşı tarafta). %lld sn sonra tekrar dene."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachment storage is full (yours or the recipient's). Try again in %lld s."
           }
         }
       }

@@ -65,20 +65,34 @@ extension MessageSync {
         return response
     }
 
-    /// `401 invalid_token` → re-challenge/login once per outbox pump; a persistent failure surfaces `.authInvalid`.
+    /// Fresh-challenge login attempts that must all answer `401 unknown_user`/`bad_signature` before the rejection
+    /// counts as persistent (§4.5).
+    static let loginRejectionAttempts: Int = 2
+
+    /// `401 invalid_token` → re-challenge/login once per outbox pump. A login answered `401 unknown_user` or
+    /// `bad_signature` is retried once with a fresh challenge; when it persists, `loginRejected` is latched (no
+    /// re-login ever again, so no loop), the sync stops and `.authInvalid` is emitted once: the UI returns to
+    /// onboarding. Every other failure (`clock_skew`, `nonce_invalid`, 408, 429, 5xx, offline) stays transient.
     func reauthenticateIfNeeded() async {
-        guard !reauthenticatedThisPump else { return }
+        guard !loginRejected, !reauthenticatedThisPump else { return }
         reauthenticatedThisPump = true
-        do {
-            _ = try await login()
-        } catch let e as APIError {
-            if let s = e.status, s == 401 || s == 404 {
+        var rejections: Int = 0
+        while rejections < MessageSync.loginRejectionAttempts {
+            do {
+                _ = try await login()
+                return
+            } catch let e as APIError where e.isLoginRejection {
+                rejections += 1
                 MessageSync.logger.error("re-login rejected \(e.code ?? "", privacy: .public)")
-                emit(.authInvalid)
+            } catch {
+                MessageSync.logger.error("re-login failed: \(String(describing: error), privacy: .public)")
+                return
             }
-        } catch {
-            MessageSync.logger.error("re-login failed: \(String(describing: error), privacy: .public)")
         }
+        guard !loginRejected else { return }
+        loginRejected = true
+        await stop()
+        emit(.authInvalid)
     }
 
     /// `DELETE /v1/auth/session` (best effort) — the local data stays.

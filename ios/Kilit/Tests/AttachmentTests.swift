@@ -81,12 +81,17 @@ final class AttachmentTests: XCTestCase {
             XCTAssertEqual(KilitErrorName.of(e), "authenticationFailure")
         }
         XCTAssertFalse(AttachmentCrypto.verifyDigest(blob: tampered, expected: sealed.sha256))
-        // Wrong header.
+        // Wrong header version: an AEAD-class failure, authenticationFailure (Go OpenAttachment).
         var badHeader: Data = sealed.blob
         badHeader[badHeader.startIndex + 4] = 0x02
         XCTAssertThrowsError(try AttachmentCrypto.open(blob: badHeader, fileKey: sealed.fileKey, blobId: sealed.blobId,
                                                        mime: "image/jpeg", len: sealed.len)) { e in
-            XCTAssertEqual(KilitErrorName.of(e), "badHeader")
+            XCTAssertEqual(KilitErrorName.of(e), "authenticationFailure")
+        }
+        // A 31-byte fileKey is rejected before the header is looked at.
+        XCTAssertThrowsError(try AttachmentCrypto.open(blob: sealed.blob, fileKey: sealed.fileKey.prefix(31),
+                                                       blobId: sealed.blobId, mime: "image/jpeg", len: sealed.len)) { e in
+            XCTAssertEqual(KilitErrorName.of(e), "badKeyLength")
         }
     }
 

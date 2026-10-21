@@ -11,7 +11,8 @@ enum SyncEvent: Equatable {
     case keyChangeDetected(peer: String)
     case connection(WSState)
     case prekeys(opkCount: Int)
-    /// Re-login failed persistently: the UI shows the explanation of §4.5.
+    /// Login persistently rejected (`401 unknown_user`/`bad_signature`); the sync has stopped and the UI returns
+    /// to onboarding with the explanation of §4.5.
     case authInvalid
 }
 
@@ -57,6 +58,8 @@ actor MessageSync {
     var coalescer: ControlCoalescer = ControlCoalescer()
     var pumping: Bool = false
     var reauthenticatedThisPump: Bool = false
+    /// Latched once login is persistently rejected (`401 unknown_user`/`bad_signature`, §4.5): no further re-login.
+    var loginRejected: Bool = false
     var running: Bool = false
     var connection: WSState = .stopped
     var outboxWake: Task<Void, Never>?
@@ -109,6 +112,8 @@ actor MessageSync {
         await expireAllParked()
         let next: UInt64? = await purgeExpired()
         await recoverLostSessions()
+        // Stopped meanwhile (login persistently rejected → `.authInvalid` → wipe): never restart the loops.
+        guard running else { return next }
         startLoops()
         await webSocket?.start()
         await pumpOutbox()

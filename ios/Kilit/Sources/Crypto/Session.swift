@@ -273,10 +273,10 @@ struct PeerSessions: Codable, Equatable {
     }
 
     /// The per-peer 10-minute recovery bound (Go `recoveryAllowed`), shared by every recovery trigger.
-    /// A clock that went backwards past the stamp reopens the bound.
+    /// A clock that went backwards past the stamp keeps the bound closed, as Go's signed difference does.
     func recoveryAllowed(now: UInt64) -> Bool {
-        guard let last = lastRecoveryAt, now >= last else { return true }
-        return now - last >= PeerSessions.recoveryInterval
+        guard let last = lastRecoveryAt else { return true }
+        return now >= last && now - last >= PeerSessions.recoveryInterval
     }
 
     /// Stamps the bound at a recovery initiation (Go `initiateResync`); the load-time S3 path

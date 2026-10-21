@@ -22,29 +22,42 @@ final class URLSessionTransport: HTTPTransport {
 }
 
 enum APIError: Error, Equatable {
-    /// Non-2xx with the server's `{"error": code}` when it parsed, plus `server_time` on `clock_skew`.
-    case http(status: Int, code: String?, serverTime: UInt64?)
+    /// Non-2xx with the server's `{"error": code}` when it parsed, plus `server_time` on `clock_skew` and the
+    /// delta-seconds `Retry-After` header when present (`429 rate_limited` / `attachment_quota`).
+    case http(status: Int, code: String?, serverTime: UInt64?, retryAfter: UInt64?)
     case transport(String)
     case badResponse
     case notLoggedIn
 
     var status: Int? {
-        if case .http(let s, _, _) = self { return s }
+        if case .http(let s, _, _, _) = self { return s }
         return nil
     }
 
     var code: String? {
-        if case .http(_, let c, _) = self { return c }
+        if case .http(_, let c, _, _) = self { return c }
         return nil
     }
 
-    /// Offline, 5xx, 429, timeout, `401 invalid_token` (until re-login): park / retry, never a verdict (§3.2 step 1).
+    var retryAfter: UInt64? {
+        if case .http(_, _, _, let r) = self { return r }
+        return nil
+    }
+
+    /// `401 unknown_user` / `bad_signature` on `POST /v1/auth/login`: the server does not know this account or
+    /// these keys (§4.5). Never retried in a loop; when it persists the client returns to onboarding.
+    var isLoginRejection: Bool {
+        status == 401 && (code == "unknown_user" || code == "bad_signature")
+    }
+
+    /// Offline, 5xx, 429 (incl. `attachment_quota`), `408 request_timeout`, `401 invalid_token` (until re-login):
+    /// park / retry, never a verdict (§3.2 step 1).
     var isTransient: Bool {
         switch self {
         case .transport, .badResponse, .notLoggedIn:
             return true
-        case .http(let s, let c, _):
-            return s >= 500 || s == 429 || (s == 401 && c == "invalid_token")
+        case .http(let s, let c, _, _):
+            return s >= 500 || s == 429 || s == 408 || (s == 401 && c == "invalid_token")
         }
     }
 }
@@ -157,7 +170,10 @@ actor APIClient {
         }
         guard (200...299).contains(response.statusCode) else {
             let parsed: ErrorResponse? = try? KilitJSON.decoder().decode(ErrorResponse.self, from: data)
-            throw APIError.http(status: response.statusCode, code: parsed?.error, serverTime: parsed?.serverTime)
+            let retry: String? = response.value(forHTTPHeaderField: "Retry-After")
+            let retryAfter: UInt64? = retry.flatMap { UInt64($0.trimmingCharacters(in: .whitespaces)) }
+            throw APIError.http(status: response.statusCode, code: parsed?.error, serverTime: parsed?.serverTime,
+                                retryAfter: retryAfter)
         }
         return (data, response)
     }
@@ -254,7 +270,7 @@ actor APIClient {
     func deleteBlob(blobID: String) async throws {
         do {
             try await callNoContent(try makeRequest("DELETE", "/v1/attachments/\(blobID)", contentType: nil, auth: true))
-        } catch APIError.http(let status, _, _) where status == 404 {
+        } catch APIError.http(let status, _, _, _) where status == 404 {
             return
         }
     }
@@ -305,17 +321,23 @@ enum AuthRequests {
     }
 }
 
-// MARK: - Attachment upload (§3.5: fresh blob_id AND fileKey on 409, ≤ 3 attempts)
+// MARK: - Attachment upload (§3.5: fresh blob_id AND fileKey on 409 / 408, ≤ 3 attempts)
 
 enum AttachmentUploadError: Error, Equatable {
     case exhausted
+    /// `429 attachment_quota`: the owner's or the recipient's blob quota is full. Temporary, never a verdict: the
+    /// user (whose send is pending) is told to retry after `retryAfter` seconds (`Retry-After`, 60 s default).
+    case quotaExceeded(retryAfter: UInt64)
 }
 
 enum AttachmentUploader {
     static let maxAttempts: Int = 3
+    static let defaultQuotaRetryAfter: UInt64 = 60
 
-    /// Seals (drawing `blob_id` and `fileKey` from `keySource`) and uploads; on `409 blob_exists` the plaintext is
-    /// re-sealed under a new `blob_id` and a new `fileKey`. Any other error propagates.
+    /// Seals (drawing `blob_id` and `fileKey` from `keySource`) and uploads; on `409 blob_exists` and on a transient
+    /// `408 request_timeout` (the server already removed the partial file) the plaintext is re-sealed under a new
+    /// `blob_id` and a new `fileKey` (the last attempt's 408 propagates). `429 attachment_quota` becomes
+    /// `.quotaExceeded`. Any other error propagates.
     static func upload(plaintext: Data, mime: String, recipient: String, api: APIClient, keySource: KeySource) async throws -> SealedAttachment {
         var attempt: Int = 0
         while attempt < maxAttempts {
@@ -324,8 +346,12 @@ enum AttachmentUploader {
             do {
                 _ = try await api.upload(blobID: sealed.blobIdHex, recipient: recipient, data: sealed.blob)
                 return sealed
-            } catch APIError.http(let status, let code, _) where status == 409 && code == "blob_exists" {
+            } catch APIError.http(let status, let code, _, _) where status == 409 && code == "blob_exists" {
                 continue
+            } catch APIError.http(let status, _, _, _) where status == 408 && attempt < maxAttempts {
+                continue
+            } catch APIError.http(let status, let code, _, let retryAfter) where status == 429 && code == "attachment_quota" {
+                throw AttachmentUploadError.quotaExceeded(retryAfter: retryAfter ?? defaultQuotaRetryAfter)
             }
         }
         throw AttachmentUploadError.exhausted

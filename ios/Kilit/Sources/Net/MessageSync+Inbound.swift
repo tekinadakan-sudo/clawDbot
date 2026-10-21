@@ -62,10 +62,12 @@ extension MessageSync {
         let acks: [String] = result.ackIds
         var opkUsed: [UInt32] = []
         var keyChange: Bool = false
+        var overflowed: [String] = []
         for a in result.actions {
             switch a {
             case .deleteOneTimePrekey(let id): opkUsed.append(id)
             case .keyChangeDetected: keyChange = true
+            case .ack(let id, .parkedOverflow) where id != msgId: overflowed.append(id)
             case .ack, .initiateRecovery, .rerunParked, .lookupIdentity, .contactCreated, .resyncReceived: break
             }
         }
@@ -84,6 +86,13 @@ extension MessageSync {
         case .alreadyProcessed:
             writeConv = reprocessing
         }
+        // A parked envelope evicted by this park was classified `parked_overflow`: it gets its row too.
+        for id in overflowed {
+            convDoc.append(MessageSync.systemRow(id: id, peer: peer, kind: .undecryptable, ts: now, now: now,
+                                                 state: .undecryptable(InboundReason.parkedOverflow.rawValue)))
+        }
+        if !overflowed.isEmpty { writeConv = true }
+        let evicted: [String] = overflowed
         let pendingIdentity: IdentityPublicKeys? = keyChange ? parsedOuter?.outer.x3dh?.identity : nil
         let stored: Bool
         if case .stored = result.outcome { stored = true } else { stored = false }
@@ -106,6 +115,9 @@ extension MessageSync {
                 }
                 if let p = pendingIdentity { idx.conversations[i].pendingKeyChange = p }
                 if let r = undecryptableReason { idx.logUndecryptable(peer: peer, msgId: msgId, reason: r, at: now) }
+                for id in evicted {
+                    idx.logUndecryptable(peer: peer, msgId: id, reason: InboundReason.parkedOverflow.rawValue, at: now)
+                }
             }
         } catch {
             MessageSync.logger.error("inbound persist failed: \(String(describing: error), privacy: .public)")

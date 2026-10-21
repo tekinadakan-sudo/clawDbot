@@ -186,6 +186,9 @@ final class AppModel {
         case .prekeys(let count):
             diagnostics.opkCount = count
         case .authInvalid:
+            // Persistent `401 unknown_user`/`bad_signature` on login. Sync has stopped (MessageSync.loginRejected).
+            // Deviation from §4.5: no automatic wipe and no forced onboarding, because an untrusted server could
+            // otherwise erase local history just by answering 401. The user resets from Settings if they choose to.
             authInvalid = true
             showToast(String(localized: "auth.invalid",
                              defaultValue: "Oturum geçersiz; sunucu bu cihazı tanımıyor. Hesabı sil ve sıfırla gerekebilir."))

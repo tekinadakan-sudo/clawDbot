@@ -171,9 +171,9 @@ extension ScenarioRunner {
         guard s.sessions.session(sid: sid) != nil else { throw VecError("\(context): no session to roll back") }
         s.sessions.deleteSession(sid: sid, reason: .rollback, now: clock)
         s.rawSessions = s.rawSessions.filter { $0.value.sid != sid }
-        if s.sessions.gateS3Recovery(now: clock) {
-            try recover(s, lostSid: sid)
-        }
+        // Go `LoseSession` → `initiateResync` recovers and stamps the shared bound without consulting it.
+        s.sessions.stampRecovery(now: clock)
+        try recover(s, lostSid: sid)
     }
 
     /// `delete_session` with an optional `reason` (default `parse_failure`, which makes a later `msg` on it an S3 trigger).

@@ -107,6 +107,48 @@ final class AttachmentUploadTests: XCTestCase {
         XCTAssertEqual(log.paths.count, 1)
     }
 
+    /// `429 attachment_quota` is temporary: surfaced with the server's `Retry-After`, no blind retry, transient.
+    func testAttachmentQuotaSurfacesRetryAfter() async throws {
+        let log: UploadLog = UploadLog()
+        let transport: StubTransport = StubTransport { request in
+            _ = log.record(request)
+            let body: Data = try JSONSerialization.data(withJSONObject: ["error": "attachment_quota", "message": "quota"])
+            guard let url = request.url,
+                  let response = HTTPURLResponse(url: url, statusCode: 429, httpVersion: "HTTP/1.1",
+                                                 headerFields: ["Retry-After": "60", "Content-Type": "application/json"]) else {
+                throw HarnessError.badURL
+            }
+            return (body, response)
+        }
+        do {
+            _ = try await AttachmentUploader.upload(plaintext: Data([2]), mime: "image/jpeg", recipient: "bob",
+                                                    api: api(transport), keySource: RandomKeySource())
+            XCTFail("expected the quota error")
+        } catch let e as AttachmentUploadError {
+            XCTAssertEqual(e, .quotaExceeded(retryAfter: 60))
+        }
+        XCTAssertEqual(log.paths.count, 1)
+        XCTAssertTrue(APIError.http(status: 429, code: "attachment_quota", serverTime: nil, retryAfter: 60).isTransient)
+    }
+
+    /// `408 request_timeout` (trickled body) is transient: re-sealed under a fresh `blob_id` and retried.
+    func testRequestTimeoutIsRetried() async throws {
+        let log: UploadLog = UploadLog()
+        let transport: StubTransport = StubTransport { request in
+            let n: Int = log.record(request)
+            if n == 1 { return try StubTransport.json(408, request, ["error": "request_timeout", "message": "slow"]) }
+            let id: String = String((request.url?.path ?? "").split(separator: "/").last ?? "")
+            return try StubTransport.json(201, request, ["id": id, "expires_at": 1_760_100_000])
+        }
+        let sealed: SealedAttachment = try await AttachmentUploader.upload(plaintext: Data([3, 4]), mime: "image/jpeg",
+                                                                           recipient: "bob", api: api(transport),
+                                                                           keySource: RandomKeySource())
+        XCTAssertEqual(log.paths.count, 2)
+        XCTAssertNotEqual(log.paths[0], log.paths[1])
+        XCTAssertEqual(log.paths[1], "/v1/attachments/\(sealed.blobIdHex)")
+        XCTAssertTrue(APIError.http(status: 408, code: "request_timeout", serverTime: nil, retryAfter: nil).isTransient)
+    }
+
     /// End to end: `sendImage` uploads, keeps the sender's ciphertext locally and sends an `image` message whose
     /// `att` matches the upload; the receiver's download path issues `DELETE` after a verified download.
     func testSendImageAndReceiverDownloadDelete() async throws {

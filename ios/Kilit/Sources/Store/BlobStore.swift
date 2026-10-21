@@ -66,7 +66,7 @@ enum AttachmentDownloader {
         let bytes: Data
         do {
             bytes = try await api.download(blobID: att.blob)
-        } catch APIError.http(let status, _, _) where status == 404 {
+        } catch APIError.http(let status, _, _, _) where status == 404 {
             return false
         }
         guard AttachmentCrypto.verifyDigest(blob: bytes, expected: att.sha256) else {

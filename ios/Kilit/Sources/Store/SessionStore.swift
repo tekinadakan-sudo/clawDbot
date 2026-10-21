@@ -71,11 +71,14 @@ final class SessionStore {
             if let s = stale {
                 fresh.peer.seenEk = s.peer.seenEk
                 fresh.peer.knownSids = s.peer.knownSids
+                fresh.peer.lastRecoveryAt = s.peer.lastRecoveryAt
                 lost = s.peer.sessions.map { $0.sid }
             }
             for sid in lost {
                 fresh.peer.rememberDeleted(sid: sid, reason: .rollback, now: now)
             }
+            // Go `LoseSession` → `initiateResync` stamps the shared bound without consulting it.
+            if !lost.isEmpty { fresh.peer.stampRecovery(now: now) }
             pendingRecovery[peer] = lost
             try store.commit([try DocumentWrite(path: path, value: fresh)])
             return fresh
