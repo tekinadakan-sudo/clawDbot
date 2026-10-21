@@ -341,7 +341,8 @@ jobs:
               (r"CSSearchableIndex", "CSSearchableIndex", set()),
               (r"NSUserActivity", "NSUserActivity", set()),
               (r"(?<![A-Za-z_.])print\(", "print(", set()),
-              (r"\bCanvas\s*[({]", "SwiftUI Canvas (blur-based hiding is forbidden)", set()),
+              # SafetyNumberView draws the safety-number QR code with Canvas; that is not blur-based hiding.
+              (r"\bCanvas\s*[({]", "SwiftUI Canvas (blur-based hiding is forbidden)", {"SafetyNumberView.swift"}),
               (r"UIWindowScene\.screenshotService|\.screenshotService\b", "screenshotService", set()),
               (r"nonisolated\(unsafe\)", "nonisolated(unsafe)", set()),
           ]
@@ -372,7 +373,12 @@ jobs:
                   if m.group(1) not in ALLOWED_IMPORTS:
                       line = code.count("\n", 0, m.start()) + 1
                       gate_hits.append(f"{relp}:{line}: non-Apple/third-party import {m.group(1)}")
-              if len(raw.splitlines()) > 500:
+              # Generated vector literals (Tests/Vectors/) are JSON in raw strings; the
+              # design bounds them by size (<= 200 KB each, DESIGN.md §3.8), not by lines.
+              if os.sep + "Vectors" + os.sep in path:
+                  if len(raw.encode("utf-8")) > 200 * 1024:
+                      gate_hits.append(f"{relp}: generated vector file > 200 KB")
+              elif len(raw.splitlines()) > 500:
                   gate_hits.append(f"{relp}: {len(raw.splitlines())} lines > 500")
           if gate_hits:
               for h in gate_hits:
