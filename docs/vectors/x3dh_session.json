@@ -1,0 +1,128 @@
+{
+  "first_envelope": {
+    "ct": "IXPCshxJsOtXQd1ktRORaO-ttPvGYZzYPZrNkscws6yS-CtyzhVLiV7kOCagCwX3zzatW9v80mz4WkGq-l08WRoL_OALuUWTfZbf4uz-rdFWClxPAojkn9EgAY_6_MoPwO2IWXe36I_OVjnpjCtcH_23oNAfK37sj-TEKuLansqu5XP5Glljd2XRueylMkxGrfMMWozLLK5qRdmX5cBpBDjv3gtdeSXiTy6em_luWOpyKATSG383WmP0li0ApDqrGmI6e7AsX-OVQcL3UJGJHbeWINGlJYnQXvnTp3BnSmgRJQU4YWXJQMun94x3yuFj3KHTuKIuCIQzKdT0PiFUUIYJaDp39cArdSb9uLEh00w",
+    "hdr": "AewT0joX2vF0dQ33rWeoah1Oq-yPUXY2YFKBwdsYxmZJAAAAAAAAAAA",
+    "kind": "prekey",
+    "sid": "AAnxrsjgWqg",
+    "v": 1,
+    "x3dh": {
+      "ek": "mVL7flODxSLJVN6U8uRiDT4IzZ5ySK0jIH-e9VyQQUQ",
+      "ik_bind_sig": "9kXVTk08MZWbS4lhs7gbNeZgU4R-_cnYMoP9LS5XahzzI8i05HqCptqFcN7rFzdJNnbdn3kiyFLXpgUN8ucKBg",
+      "ik_dh": "rYxIwmdlrqetxTYolgXBq-qVBQCT29IYyWq9JIGgNWU",
+      "ik_sig": "TLWr9q15-_WrvMr8wmnYXNJlHtS4hbWGnyQa7fCluik",
+      "opk_id": 1203,
+      "spk_id": 7
+    }
+  },
+  "inputs": {
+    "alice": {
+      "dhs_priv": "0000000000000000000000000000000000000000000000000000000000000004",
+      "ek_priv": "0000000000000000000000000000000000000000000000000000000000000003",
+      "ik_dh_priv": "0000000000000000000000000000000000000000000000000000000000000002",
+      "ik_sig_seed": "0000000000000000000000000000000000000000000000000000000000000001",
+      "username": "alice"
+    },
+    "bob": {
+      "ik_dh_priv": "1000000000000000000000000000000000000000000000000000000000000002",
+      "ik_sig_seed": "1000000000000000000000000000000000000000000000000000000000000001",
+      "opks": [
+        {
+          "id": 1203,
+          "priv": "1000000000000000000000000000000000000000000000000000000000000004"
+        },
+        {
+          "id": 1204,
+          "priv": "1000000000000000000000000000000000000000000000000000000000000006"
+        }
+      ],
+      "spk_created_at": 1759900000,
+      "spk_id": 7,
+      "spk_priv": "1000000000000000000000000000000000000000000000000000000000000003",
+      "username": "bob"
+    },
+    "device_id": "6f1d2c3b-4a59-4e8f-9b0c-1d2e3f4a5b6c",
+    "nonce": "2020202020202020202020202020202020202020202020202020202020202020",
+    "server_origin": "https://kilit.example.com",
+    "ts": 1760000000
+  },
+  "negative": [
+    {
+      "error": "identityMismatch",
+      "name": "ik_dh_swapped"
+    },
+    {
+      "error": "badSignature",
+      "name": "bad_bind_sig"
+    },
+    {
+      "error": "staleSPK",
+      "name": "stale_spk",
+      "spk_created_at": 1758099200
+    }
+  ],
+  "public": {
+    "alice": {
+      "ek": "9952fb7e5383c522c954de94f2e4620d3e08cd9e7248ad23207f9ef55c904144",
+      "ik_dh": "ad8c48c26765aea7adc536289605c1abea95050093dbd218c96abd2481a03565",
+      "ik_sig": "4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29"
+    },
+    "bob": {
+      "ik_dh": "0c16e25bd03435053e26321bbc068cd5e8129f4a545db4107b142382264e1836",
+      "ik_sig": "4b828befc66957c00a53cc0397dce856eb1275ada3eeeb440a9533b898a72498",
+      "opks": [
+        {
+          "id": 1203,
+          "pub": "cc2baa8e2d21645e532389812c8a7c4e83cbdf9f8132dc76d857a2a52313146e"
+        },
+        {
+          "id": 1204,
+          "pub": "1f99d7e33ad31edbf2cb12cd88b9c7dc84462495c102f25ea7926de7b633f312"
+        }
+      ],
+      "spk": "0f825cdeb6cefb9296d768a3f73b51be7a90f26017e857f5fdfa12443416906b"
+    }
+  },
+  "signatures": {
+    "delete_sig": {
+      "msg": "4b696c69745f44656c6574655f763100616c696365002020202020202020202020202020202020202020202020202020202020202020000000000068e778000068747470733a2f2f6b696c69742e6578616d706c652e636f6d",
+      "sig": "e6908f9ce9d8b404fde39908989ecf03b64343249d6f3a4949e88e256eb4b641b39b4a0b567daadf4ee9509b49cb8c99680d4bbc5cbbf88cbc0594b6f9fc680d",
+      "signer": "alice"
+    },
+    "ik_bind_sig": {
+      "msg": "4b696c69745f494b42696e645f76310c16e25bd03435053e26321bbc068cd5e8129f4a545db4107b142382264e1836",
+      "sig": "e3ea77d81456bbc70390f29629630dc1340b26d38b7425d8256212741a0ac9eac2984aa78309ed3c1ba576f7ca80f39baa93bfd1011cc41df73207abbadaab06",
+      "signer": "bob"
+    },
+    "login_sig": {
+      "msg": "4b696c69745f417574685f763100616c696365002020202020202020202020202020202020202020202020202020202020202020000000000068e778000036663164326333622d346135392d346538662d396230632d3164326533663461356236630068747470733a2f2f6b696c69742e6578616d706c652e636f6d",
+      "sig": "049a7e538259c58e6a31ba14ff2df9e956d5dc1f94803692c2c81b36edbcd5bd89245dab356dce61d2c576bc73677f0914983be706ce58ab9c4efbfc03674600",
+      "signer": "alice"
+    },
+    "opks_sig": {
+      "msg": "4b696c69745f4f504b42617463685f763100000002000004b3cc2baa8e2d21645e532389812c8a7c4e83cbdf9f8132dc76d857a2a52313146e000004b41f99d7e33ad31edbf2cb12cd88b9c7dc84462495c102f25ea7926de7b633f312",
+      "sig": "147b4fc4c2a048b7a6fdeb85c4f3ba12d2a8eb894061b85f518f4ceb82d9a55841a97331a2f9ba460cc797b250ce6ddc75082453f0bc6fe8a67efca354a8ac07",
+      "signer": "bob"
+    },
+    "register_proof": {
+      "msg": "4b696c69745f52656769737465725f763100616c69636500ad8c48c26765aea7adc536289605c1abea95050093dbd218c96abd2481a035650036663164326333622d346135392d346538662d396230632d316432653366346135623663002020202020202020202020202020202020202020202020202020202020202020000000000068e778000068747470733a2f2f6b696c69742e6578616d706c652e636f6d",
+      "sig": "f85fa7b9b5a5072c4b171c1f8d71f3dd92ebcdf9b73bf3ff256c001a6293113214d118dba3f6c0b5c31dfa0fbeac90b3d35827a4cc0a1dda73fb16ee875d1a0f",
+      "signer": "alice"
+    },
+    "spk_sig": {
+      "msg": "4b696c69745f53504b5f7631000000070000000068e5f1600f825cdeb6cefb9296d768a3f73b51be7a90f26017e857f5fdfa12443416906b",
+      "sig": "31cb8f5c2159d6398c628a9bb51a3d189d5d76df792ca5200af78c9d2de240cf5297e5f5982b8b074d3bccc4efba31bd6a19b7d89811c0d2bd548ee5e2dcc409",
+      "signer": "bob"
+    }
+  },
+  "x3dh": {
+    "ad": "4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29ad8c48c26765aea7adc536289605c1abea95050093dbd218c96abd2481a035654b828befc66957c00a53cc0397dce856eb1275ada3eeeb440a9533b898a724980c16e25bd03435053e26321bbc068cd5e8129f4a545db4107b142382264e18360005616c6963650003626f62",
+    "dh1": "a4c5d6741aafc1a9c46619ae41a2ecb2e05fe2e8f79d64c8c6599a1a5a998c1b",
+    "dh2": "26c15ec2478e89a30a042c29b59e4e8f84e21a2fc070197229a6988d883bc922",
+    "dh3": "90164eb89f130458d5440a4ab35c3e30f2b1154d8b190733821585438908e31e",
+    "dh4": "c7f7b26659e62225bb833ef1978683a346d466ca040195fb861bf963949d6e45",
+    "sid": "0009f1aec8e05aa8",
+    "sk": "6c4cea713056934c77a181379312f438d72570bb6ce1189fec095733c73d1f6d",
+    "sk_no_opk": "4684098493d23ddc12611730f2b66bbe4e76800c612c9d4d824fe022a83c2f2d",
+    "ws": "365aa16b5dbbeb0d4f8da19ee3d0edca0ba6f4cada000be9d8fcaa8eb258459a"
+  }
+}
