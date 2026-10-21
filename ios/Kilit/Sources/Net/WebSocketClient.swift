@@ -208,7 +208,7 @@ actor WebSocketClient {
         try await sleeper.sleep(seconds: seconds)
     }
 
-    private func watchdogFired(_ task: WebSocketTask) {
+    private func watchdogFired(_ task: WebSocketTask) async {
         guard current === task else { return }
         watchdogFirings += 1
         task.cancel(with: .abnormalClosure, reason: nil)
