@@ -2,7 +2,7 @@
 
 Bu rehber, Kilit'i sahibin Mac mini'sinden TestFlight'a yükleyip iki iPhone'da denemek için gereken her adımı sırayla verir. Yerel bir Claude oturumu da bu dosyayı izleyebilir. **Kalın yazılı adımlar sahibin kararını ya da Apple hesabını gerektirir;** oturum bu adımlarda durup sorar.
 
-Durum: `claude/anti-recording-ios-app` dalı GitHub Actions'ta (macOS, Xcode 16.4) derleniyor ve 158/158 birim testi geçiyor. Simge, `PrivacyInfo.xcprivacy` ve bundle ID (`com.tekinadakan.kilit`) hazır.
+Durum: `claude/anti-recording-ios-app` dalı GitHub Actions'ta (macOS, Xcode 16.4) derleniyor ve 158/158 birim testi geçiyor. Simge, `PrivacyInfo.xcprivacy` ve bundle ID (`com.carwan.kilit`) hazır.
 
 ## 0. Ön koşullar
 
@@ -44,16 +44,15 @@ curl -s https://ORIGIN/healthz      # {"ok":true,...} dönmeli
 
 ## 2. Apple tarafı (Chrome'da açık Apple Developer / App Store Connect)
 
-1. **Bundle ID:** developer.apple.com → Certificates, IDs & Profiles → Identifiers → `+` → App IDs → App. Bundle ID: `com.tekinadakan.kilit` (explicit). Capabilities: **Data Protection → Complete Protection**. Xcode'un otomatik imzalaması bunu kendisi de oluşturabilir; elle açmak daha öngörülebilir.
-2. **Uygulama kaydı:** appstoreconnect.apple.com → Apps → `+` → New App. Platform: iOS. **Name:** App Store genelinde benzersiz olmalı ("Kilit" büyük ihtimalle alınmış; örn. "Kilit Messenger", sahip seçer). Primary Language: Turkish. Bundle ID: `com.tekinadakan.kilit`. SKU: `kilit-ios`. User Access: Full Access.
-3. **Team ID'yi not et:** developer.apple.com → Membership → Team ID (10 karakter).
+1. **Bundle ID:** developer.apple.com → Certificates, IDs & Profiles → Identifiers → `+` → App IDs → App. Bundle ID: `com.carwan.kilit` (explicit). Capabilities: **Data Protection → Complete Protection**. Xcode'un otomatik imzalaması bunu kendisi de oluşturabilir; elle açmak daha öngörülebilir.
+2. **Uygulama kaydı:** appstoreconnect.apple.com → Apps → `+` → New App. Platform: iOS. **Name:** App Store genelinde benzersiz olmalı; sahip "SAFE ZONE" adını seçti. Primary Language: Turkish. Bundle ID: `com.carwan.kilit`. SKU: `kilit-ios`. User Access: Full Access.
+3. **Team ID:** CARWAN AI SOLUTIONS, `UG75Y7PKGC` (developer.apple.com → Membership). `ios/ExportOptions-TestFlight.plist` içinde zaten yazılı.
 
 ## 3. Derle, arşivle, yükle
 
 ```sh
 cd ios
-TEAM=XXXXXXXXXX   # §2.3
-sed -i '' "s/TEAM_ID_HERE/$TEAM/" ExportOptions-TestFlight.plist
+TEAM=UG75Y7PKGC   # §2.3
 
 # Önce simülatör testleri (yerelde de yeşil olmalı)
 xcodebuild -project Kilit.xcodeproj -scheme Kilit \

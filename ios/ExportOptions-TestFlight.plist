@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<!-- Used by: xcodebuild -exportArchive -exportOptionsPlist ios/ExportOptions-TestFlight.plist
-	     Replace TEAM_ID_HERE with the 10-character Team ID (developer.apple.com → Membership). -->
+	     Team ID of CARWAN AI SOLUTIONS (developer.apple.com → Membership). -->
 	<key>method</key>
 	<string>app-store-connect</string>
 	<key>destination</key>
 	<string>upload</string>
 	<key>teamID</key>
-	<string>TEAM_ID_HERE</string>
+	<string>UG75Y7PKGC</string>
 	<key>signingStyle</key>
 	<string>automatic</string>
 	<key>uploadSymbols</key>

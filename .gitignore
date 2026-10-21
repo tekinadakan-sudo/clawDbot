@@ -11,3 +11,6 @@ server/data/
 
 # OS
 .DS_Store
+
+# Local archives and DerivedData (docs/TESTFLIGHT.md §3)
+build/
