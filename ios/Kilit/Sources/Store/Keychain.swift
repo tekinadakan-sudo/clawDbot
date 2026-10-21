@@ -12,7 +12,11 @@ enum KeychainAccount {
     static let token: String = "auth.token.v1"
     static let deviceId: String = "device.id.v1"
     static let storeGeneration: String = "store.generation"
-    static let all: [String] = [identitySig, identityDh, masterKey, token, deviceId, storeGeneration]
+    /// Username and canonical server origin, kept in the Keychain so a reinstall (files gone, Keychain kept) can
+    /// still delete the account on the server before wiping (§5.3, §8 WP7).
+    static let username: String = "account.username.v1"
+    static let serverOrigin: String = "server.origin.v1"
+    static let all: [String] = [identitySig, identityDh, masterKey, token, deviceId, storeGeneration, username, serverOrigin]
 }
 
 enum KeychainError: Error, Equatable {

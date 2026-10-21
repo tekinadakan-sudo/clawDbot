@@ -54,7 +54,7 @@ enum APIError: Error, Equatable {
 actor APIClient {
     static let requestTimeout: TimeInterval = 60
 
-    let origin: String
+    nonisolated let origin: String
     private let transport: HTTPTransport
     private(set) var token: String?
     /// `server_time − localNow` learned from the last challenge.

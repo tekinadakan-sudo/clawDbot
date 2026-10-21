@@ -41,7 +41,7 @@ final class BlobStore {
     }
 
     func delete(id: String) {
-        try? writer.remove(url(id: id))
+        _ = try? writer.remove(url(id: id))
     }
 
     func deleteAll() throws {

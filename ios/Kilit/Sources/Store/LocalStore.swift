@@ -46,16 +46,33 @@ final class DiskFileWriter: FileWriter {
     }
 }
 
-/// Dictionary-backed writer for tests and previews; records every written path in order.
+enum MemoryFileWriterError: Error, Equatable {
+    /// Injected by `MemoryFileWriter.failAfterWrites` (simulated crash / I/O failure).
+    case injected
+}
+
+/// Dictionary-backed writer for tests and previews; records every written path (full path) in order and can
+/// inject a failure after a given number of successful writes.
 final class MemoryFileWriter: FileWriter {
     private(set) var files: [String: Data] = [:]
     private(set) var writtenPaths: [String] = []
+    private(set) var successfulWrites: Int = 0
+    /// When set, every write after this many successful ones throws `MemoryFileWriterError.injected`.
+    var failAfterWrites: Int? = nil
 
     init() {}
 
     func write(_ data: Data, to url: URL) throws {
+        if let limit = failAfterWrites, successfulWrites >= limit { throw MemoryFileWriterError.injected }
         files[url.path] = data
-        writtenPaths.append(url.lastPathComponent)
+        writtenPaths.append(url.path)
+        successfulWrites += 1
+    }
+
+    func resetCounters() {
+        writtenPaths = []
+        successfulWrites = 0
+        failAfterWrites = nil
     }
 
     func read(_ url: URL) throws -> Data? {
@@ -242,11 +259,11 @@ final class LocalStore {
     /// Directory with `.complete` protection and `isExcludedFromBackup`, re-applied on every launch.
     func prepareDirectory() throws {
         try writer.createDirectory(directory)
-        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: directory.path)
+        _ = try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: directory.path)
         var url: URL = directory
         var values: URLResourceValues = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? url.setResourceValues(values)
+        _ = try? url.setResourceValues(values)
     }
 
     private func loadOrCreateMasterKey() throws -> Data {
@@ -341,7 +358,7 @@ final class LocalStore {
         generationLock.unlock()
         if let g = pending {
             // A Keychain write that fails after a successful index.json write is tolerated (§3.7).
-            try? keychain.writeStoreGeneration(g)
+            _ = try? keychain.writeStoreGeneration(g)
         }
     }
 

@@ -62,6 +62,13 @@ struct InboundDeduper: Equatable {
         return true
     }
 
+    /// Forgets an id whose processing could not be persisted, so a redelivery is admitted again.
+    mutating func forget(_ msgId: String) {
+        guard seen.contains(msgId) else { return }
+        seen.remove(msgId)
+        order.removeAll { $0 == msgId }
+    }
+
     var count: Int { order.count }
 }
 
