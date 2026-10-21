@@ -145,7 +145,7 @@ jobs:
           must('31', 'ENABLE_TESTABILITY', 'YES'); must('31', 'IPHONEOS_DEPLOYMENT_TARGET', '17.0'); must('32', 'IPHONEOS_DEPLOYMENT_TARGET', '17.0');
           if (bs('32').ENABLE_TESTABILITY !== undefined) throw new Error('ENABLE_TESTABILITY set in Release');
           for (const s of ['15', '16']) {
-            must(s, 'PRODUCT_BUNDLE_IDENTIFIER', 'com.example.Kilit'); must(s, 'SWIFT_VERSION', '5.0'); must(s, 'TARGETED_DEVICE_FAMILY', '1');
+            must(s, 'PRODUCT_BUNDLE_IDENTIFIER', 'com.tekinadakan.kilit'); must(s, 'SWIFT_VERSION', '5.0'); must(s, 'TARGETED_DEVICE_FAMILY', '1');
             must(s, 'GENERATE_INFOPLIST_FILE', 'YES'); must(s, 'CODE_SIGN_ENTITLEMENTS', 'Kilit/Kilit.entitlements');
             must(s, 'CODE_SIGN_STYLE', 'Automatic'); must(s, 'DEVELOPMENT_TEAM', ''); must(s, 'ENABLE_PREVIEWS', 'YES');
             must(s, 'IPHONEOS_DEPLOYMENT_TARGET', '17.0'); must(s, 'INFOPLIST_KEY_UILaunchScreen_Generation', 'YES');
@@ -158,7 +158,7 @@ jobs:
           must('15', 'INFOPLIST_FILE', 'Kilit/Info-Debug.plist'); must('16', 'INFOPLIST_FILE', 'Kilit/Info-Release.plist');
           for (const s of ['25', '26']) {
             must(s, 'TEST_HOST', '$(BUILT_PRODUCTS_DIR)/Kilit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kilit');
-            must(s, 'BUNDLE_LOADER', '$(TEST_HOST)'); must(s, 'PRODUCT_BUNDLE_IDENTIFIER', 'com.example.KilitTests'); must(s, 'SWIFT_VERSION', '5.0');
+            must(s, 'BUNDLE_LOADER', '$(TEST_HOST)'); must(s, 'PRODUCT_BUNDLE_IDENTIFIER', 'com.tekinadakan.kilit.tests'); must(s, 'SWIFT_VERSION', '5.0');
           }
           // INFOPLIST_FILE must point at existing files outside the synced folders
           const iosDir = path.dirname(path.dirname(file));

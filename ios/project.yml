@@ -8,7 +8,7 @@
 # so the hand-written project and this file are mutually exclusive workflows; never mix them.
 name: Kilit
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.tekinadakan
   developmentLanguage: tr
   deploymentTarget:
     iOS: "17.0"
@@ -42,7 +42,7 @@ targets:
         type: syncedFolder
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.Kilit
+        PRODUCT_BUNDLE_IDENTIFIER: com.tekinadakan.kilit
         PRODUCT_NAME: "$(TARGET_NAME)"
         GENERATE_INFOPLIST_FILE: "YES"
         CODE_SIGN_ENTITLEMENTS: Kilit/Kilit.entitlements
@@ -78,7 +78,7 @@ targets:
       - target: Kilit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.KilitTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.tekinadakan.kilit.tests
         PRODUCT_NAME: "$(TARGET_NAME)"
         GENERATE_INFOPLIST_FILE: "YES"
         SWIFT_EMIT_LOC_STRINGS: "NO"
