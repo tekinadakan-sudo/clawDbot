@@ -328,8 +328,8 @@ actor MessageSync {
         for conversation in store.index.conversations {
             let peer: String = conversation.peer
             var doc: ConversationDocument = loadConversation(peer)
-            // `DisappearingScheduler` is `@MainActor`; its pure statics are hopped to from this actor.
-            let expired: [Message] = await DisappearingScheduler.expired(doc.messages, now: now)
+            // `expired`/`earliestDeadline` are `nonisolated` pure statics, callable synchronously from this actor.
+            let expired: [Message] = DisappearingScheduler.expired(doc.messages, now: now)
             if !expired.isEmpty {
                 for m in expired {
                     if let att = m.att { blobs.delete(id: att.blob) }
@@ -342,7 +342,7 @@ actor MessageSync {
                     MessageSync.logger.error("purge write failed: \(String(describing: error), privacy: .public)")
                 }
             }
-            if let d = await DisappearingScheduler.earliestDeadline(doc.messages) {
+            if let d = DisappearingScheduler.earliestDeadline(doc.messages) {
                 next = min(next ?? d, d)
             }
         }

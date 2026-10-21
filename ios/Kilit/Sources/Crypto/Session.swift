@@ -9,12 +9,26 @@ enum SessionRole: String, Codable, Equatable {
 }
 
 enum SupersededReason: String, Codable, Equatable {
-    /// S1: a newer responder session with the peer was committed.
-    case peerMovedOn = "peer_moved_on"
+    /// S1: a newer responder session with the peer was committed (Go `SupersededS1`).
+    case peerMovedOn = "s1"
     /// S2: the peer's identity keys changed and the new record was accepted.
     case oldIdentity
     /// The peer told us via `ctrl.resync{lost_sid}` that it lost this session.
     case resync
+
+    /// Accepts the pre-rename spelling `peer_moved_on` of documents written by earlier builds.
+    init(from decoder: Decoder) throws {
+        let c: SingleValueDecodingContainer = try decoder.singleValueContainer()
+        let raw: String = try c.decode(String.self)
+        if raw == "peer_moved_on" {
+            self = .peerMovedOn
+            return
+        }
+        guard let v = SupersededReason(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "unknown superseded_reason")
+        }
+        self = v
+    }
 }
 
 struct Session: Codable, Equatable {
@@ -117,23 +131,22 @@ struct PeerSessions: Codable, Equatable {
     var sessions: [Session]
     var seenEk: [SeenEK]
     var knownSids: [KnownSid]
-    var lastRejectedInitiationRecoveryAt: UInt64?
-    var lastS3RecoveryAt: UInt64?
+    /// Last recovery initiation with this peer (Go `RecoveryAt`), shared by the rejected-initiation path,
+    /// the `unknown_sid` S3 trigger and the load-time S3 (`LoseSession`) path; nil = never.
+    var lastRecoveryAt: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case sessions
         case seenEk = "seen_ek"
         case knownSids = "known_sids"
-        case lastRejectedInitiationRecoveryAt = "last_rejected_initiation_recovery_at"
-        case lastS3RecoveryAt = "last_s3_recovery_at"
+        case lastRecoveryAt = "last_recovery_at"
     }
 
     init() {
         self.sessions = []
         self.seenEk = []
         self.knownSids = []
-        self.lastRejectedInitiationRecoveryAt = nil
-        self.lastS3RecoveryAt = nil
+        self.lastRecoveryAt = nil
     }
 
     // MARK: lookup
@@ -146,8 +159,14 @@ struct PeerSessions: Codable, Equatable {
         sessions.first { $0.sid == sid }
     }
 
+    /// Presence lookup without the age window (store bookkeeping and tests).
     func knownSid(_ sid: Data) -> KnownSid? {
         knownSids.first { $0.sid == sid }
+    }
+
+    /// Go `knownSID`: only entries deleted at most 90 d before `now` count.
+    func knownSid(_ sid: Data, now: UInt64) -> KnownSid? {
+        knownSids.first { $0.sid == sid && !(now > $0.deletedAt && now - $0.deletedAt > PeerSessions.knownSidTTL) }
     }
 
     func isSeen(ek: Data, now: UInt64) -> Bool {
@@ -169,9 +188,14 @@ struct PeerSessions: Codable, Equatable {
         knownSids.append(KnownSid(sid: sid, deletedReason: reason, deletedAt: now))
     }
 
+    /// Replaces an existing session with the same `sid` in place (stored order is preserved, as in Go,
+    /// where a session is updated through its pointer); a new `sid` is appended.
     mutating func addSession(_ session: Session) {
-        sessions.removeAll { $0.sid == session.sid }
-        sessions.append(session)
+        if let i = index(of: session.sid) {
+            sessions[i] = session
+        } else {
+            sessions.append(session)
+        }
     }
 
     /// Deletes a session (not supersession) and records its `sid` in `known_sids`.
@@ -232,36 +256,50 @@ struct PeerSessions: Codable, Equatable {
 
     /// Sending-session rule (deterministic, clock-free): among non-superseded sessions, if any has
     /// `lastActivity`, the one with the lexicographically smallest `sid` among those; otherwise the newest
-    /// own-initiated one by `createdAt`; nil means "fetch a bundle and initiate".
+    /// own-initiated one by `createdAt`, ties going to the one stored last (Go `SendingSession`:
+    /// `CreatedAt >= best.CreatedAt` in stored order); nil means "fetch a bundle and initiate".
     func sendingSession() -> Session? {
         let candidates: [Session] = sessions.filter { !$0.superseded }
         let active: [Session] = candidates.filter { $0.lastActivity != nil }
         if !active.isEmpty {
             return active.min { Bytes.lexLess($0.sid, $1.sid) }
         }
-        let own: [Session] = candidates.filter { $0.role == .initiator }
-        return own.max { a, b in
-            if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
-            return Bytes.lexLess(b.sid, a.sid)
+        var best: Session? = nil
+        for s in candidates where s.role == .initiator {
+            if let b = best, s.createdAt < b.createdAt { continue }
+            best = s
         }
+        return best
     }
 
-    /// The 10-minute gate of the rejected-initiation path; records the time when it opens.
+    /// The per-peer 10-minute recovery bound (Go `recoveryAllowed`), shared by every recovery trigger.
+    /// A clock that went backwards past the stamp reopens the bound.
+    func recoveryAllowed(now: UInt64) -> Bool {
+        guard let last = lastRecoveryAt, now >= last else { return true }
+        return now - last >= PeerSessions.recoveryInterval
+    }
+
+    /// Stamps the bound at a recovery initiation (Go `initiateResync`); the load-time S3 path
+    /// (`LoseSession`) stamps without consulting it.
+    mutating func stampRecovery(now: UInt64) {
+        lastRecoveryAt = now
+    }
+
+    /// Consults the shared bound and stamps it when it opens.
+    mutating func gateRecovery(now: UInt64) -> Bool {
+        guard recoveryAllowed(now: now) else { return false }
+        stampRecovery(now: now)
+        return true
+    }
+
+    /// The rejected-initiation trigger of the shared bound (same state as `gateS3Recovery`).
     mutating func gateRejectedInitiationRecovery(now: UInt64) -> Bool {
-        if let last = lastRejectedInitiationRecoveryAt, now >= last, now - last < PeerSessions.recoveryInterval {
-            return false
-        }
-        lastRejectedInitiationRecoveryAt = now
-        return true
+        gateRecovery(now: now)
     }
 
-    /// The 10-minute gate of the S3 trigger; records the time when it opens.
+    /// The S3 trigger of the shared bound (same state as `gateRejectedInitiationRecovery`).
     mutating func gateS3Recovery(now: UInt64) -> Bool {
-        if let last = lastS3RecoveryAt, now >= last, now - last < PeerSessions.recoveryInterval {
-            return false
-        }
-        lastS3RecoveryAt = now
-        return true
+        gateRecovery(now: now)
     }
 }
 

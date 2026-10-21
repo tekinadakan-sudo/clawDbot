@@ -176,14 +176,17 @@ actor WebSocketClient {
                 break
             }
         }
-        if let g = generation, g != loopGeneration { return }
+        if let g = generation {
+            guard g == loopGeneration else { return }
+            loop = nil
+        }
         stopPolling()
         setState(.stopped)
     }
 
     /// One connection attempt. Returns true when at least one server frame arrived after `hello`.
     func attempt() async -> Bool {
-        guard let request = await requestProvider() else { return false }
+        guard let request = await requestProvider(), !Task.isCancelled else { return false }
         let task: WebSocketTask = factory.makeTask(request)
         current = task
         task.resume()
