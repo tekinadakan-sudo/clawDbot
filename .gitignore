@@ -1,0 +1,16 @@
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Server build outputs and local data
+server/kilitd
+server/dev.db*
+server/blobs/
+server/data/
+
+# OS
+.DS_Store
+
+# Local archives and DerivedData (docs/TESTFLIGHT.md §3)
+build/

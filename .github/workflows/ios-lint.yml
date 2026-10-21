@@ -1,0 +1,406 @@
+# iOS lint (Linux). DESIGN.md §6 / §8 WP9: the Xcode project cannot be built here,
+# so this workflow runs every structural validator that works without a Mac:
+#   1. project.pbxproj parses with the cordova `xcode` parser and the 27 ids of §6 resolve
+#      (nested `Kilit` group, single-segment synced paths, developmentRegion = tr, build settings).
+#   2. Info-Debug.plist / Info-Release.plist / Kilit.entitlements parse (plistlib) and carry
+#      exactly the file-only keys of §6 (scene manifest, CADisableMinimumFrameDurationOnPhone,
+#      Debug-only NSAllowsLocalNetworking, no key duplicated with an INFOPLIST_KEY_ setting).
+#   3. Kilit.xcscheme and contents.xcworkspacedata parse as XML; BlueprintIdentifiers = target ids.
+#   4. project.yml (XcodeGen fallback) parses with PyYAML and has the §6 shape.
+#   5. Localizable.xcstrings parses, sourceLanguage = tr, every key has tr + en, no `%d` (must be `%lld`).
+#   6. The grep gates of §8 WP6/WP8 (forbidden APIs, print(, third-party imports, setValue(_:forKey:)
+#      only in CaptureShield.swift with "layer", <= 500 lines per file).
+name: ios-lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validators (outside the repository)
+        run: |
+          mkdir -p "$RUNNER_TEMP/validator"
+          cd "$RUNNER_TEMP/validator"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund xcode@3.0.1
+          python3 -m pip install --quiet pyyaml
+
+      - name: Write validator scripts
+        run: |
+          cat > "$RUNNER_TEMP/validator/check_pbxproj.js" <<'JS_EOF'
+          // Parses ios/Kilit.xcodeproj/project.pbxproj with the cordova `xcode` parser and
+          // cross-checks the 27-id table of DESIGN.md §6.
+          const path = require('path');
+          const fs = require('fs');
+          const xcode = require('xcode');
+
+          const file = process.argv[2];
+          const text = fs.readFileSync(file, 'utf8');
+          const proj = xcode.project(file);
+          proj.parseSync();
+          const objects = proj.hash.project.objects;
+          const root = proj.hash.project.rootObject;
+          if (String(proj.hash.project.objectVersion) !== '77') throw new Error('objectVersion is not 77: ' + proj.hash.project.objectVersion);
+
+          const defined = new Map(); // id -> isa
+          for (const section of Object.keys(objects)) {
+            for (const key of Object.keys(objects[section])) {
+              if (key.endsWith('_comment')) continue;
+              const obj = objects[section][key];
+              if (typeof obj !== 'object') continue;
+              if (defined.has(key)) throw new Error('duplicate id ' + key);
+              defined.set(key, obj.isa);
+            }
+          }
+          const expected = {
+            '01': 'PBXProject', '02': 'PBXGroup', '03': 'PBXGroup', '04': 'PBXFileReference', '05': 'PBXFileReference',
+            '06': 'PBXFileSystemSynchronizedRootGroup', '07': 'PBXFileSystemSynchronizedRootGroup', '09': 'PBXGroup',
+            '10': 'PBXNativeTarget', '11': 'PBXSourcesBuildPhase', '12': 'PBXFrameworksBuildPhase', '13': 'PBXResourcesBuildPhase',
+            '14': 'XCConfigurationList', '15': 'XCBuildConfiguration', '16': 'XCBuildConfiguration',
+            '20': 'PBXNativeTarget', '21': 'PBXSourcesBuildPhase', '22': 'PBXFrameworksBuildPhase', '23': 'PBXResourcesBuildPhase',
+            '24': 'XCConfigurationList', '25': 'XCBuildConfiguration', '26': 'XCBuildConfiguration',
+            '27': 'PBXContainerItemProxy', '28': 'PBXTargetDependency',
+            '30': 'XCConfigurationList', '31': 'XCBuildConfiguration', '32': 'XCBuildConfiguration',
+          };
+          const prefix = '4B494C4954000000000000';
+          const ids = Object.keys(expected).map(s => prefix + s);
+          if (ids.length !== 27) throw new Error('id table must have 27 entries, has ' + ids.length);
+          for (const [suffix, isa] of Object.entries(expected)) {
+            const id = prefix + suffix;
+            if (!defined.has(id)) throw new Error('missing object ' + id + ' (' + isa + ')');
+            if (defined.get(id) !== isa) throw new Error(id + ' is ' + defined.get(id) + ', expected ' + isa);
+          }
+          for (const id of defined.keys()) {
+            if (!ids.includes(id)) throw new Error('unexpected extra object ' + id + ' (' + defined.get(id) + ')');
+          }
+          if (defined.has(prefix + '08')) throw new Error('…08 exception set must not exist');
+          // every 24-hex id referenced anywhere in the file must be defined
+          const referenced = new Set(text.match(/\b[0-9A-F]{24}\b/g));
+          for (const id of referenced) if (!defined.has(id)) throw new Error('dangling reference ' + id);
+          for (const id of defined.keys()) if (!referenced.has(id)) throw new Error('unreferenced id ' + id);
+          if (root !== prefix + '01') throw new Error('rootObject is ' + root);
+
+          const get = (suffix) => { for (const s of Object.keys(objects)) { const o = objects[s][prefix + suffix]; if (o && typeof o === 'object') return o; } };
+          const strip = (v) => String(v).replace(/^"|"$/g, '');
+          const listIds = (arr) => (arr || []).map(e => e.value);
+          const project = get('01');
+          if (strip(project.developmentRegion) !== 'tr') throw new Error('developmentRegion != tr');
+          const regions = (project.knownRegions || []).map(e => strip(e.value || e));
+          if (JSON.stringify(regions) !== JSON.stringify(['tr', 'en', 'Base'])) throw new Error('knownRegions = ' + JSON.stringify(regions));
+          if (String(project.preferredProjectObjectVersion) !== '77') throw new Error('preferredProjectObjectVersion');
+          if (String(project.minimizedProjectReferenceProxies) !== '1') throw new Error('minimizedProjectReferenceProxies');
+          if (project.mainGroup !== prefix + '02') throw new Error('mainGroup');
+          if (JSON.stringify(listIds(project.targets)) !== JSON.stringify([prefix + '10', prefix + '20'])) throw new Error('targets');
+          if (project.attributes.TargetAttributes[prefix + '20'].TestTargetID !== prefix + '10') throw new Error('TestTargetID');
+          // group structure
+          const main = get('02');
+          if (JSON.stringify(listIds(main.children)) !== JSON.stringify([prefix + '09', prefix + '03'])) throw new Error('mainGroup children');
+          const kilit = get('09');
+          if (strip(kilit.path) !== 'Kilit' || strip(kilit.sourceTree) !== '<group>') throw new Error('Kilit group path/sourceTree');
+          if (JSON.stringify(listIds(kilit.children)) !== JSON.stringify([prefix + '06', prefix + '07'])) throw new Error('Kilit group children');
+          const src = get('06'), tst = get('07');
+          if (strip(src.path) !== 'Sources' || strip(tst.path) !== 'Tests') throw new Error('synced root paths must be single-segment Sources/Tests');
+          if (src.exceptions || tst.exceptions) throw new Error('no exception sets expected');
+          const products = get('03');
+          if (JSON.stringify(listIds(products.children)) !== JSON.stringify([prefix + '04', prefix + '05'])) throw new Error('Products children');
+          // targets
+          const app = get('10'), tests = get('20');
+          if (strip(app.productType) !== 'com.apple.product-type.application') throw new Error('app productType');
+          if (strip(tests.productType) !== 'com.apple.product-type.bundle.unit-test') throw new Error('test productType');
+          if (JSON.stringify(listIds(app.buildPhases)) !== JSON.stringify([prefix + '11', prefix + '12', prefix + '13'])) throw new Error('app phases');
+          if (JSON.stringify(listIds(tests.buildPhases)) !== JSON.stringify([prefix + '21', prefix + '22', prefix + '23'])) throw new Error('test phases');
+          if (listIds(app.fileSystemSynchronizedGroups)[0] !== prefix + '06') throw new Error('app synced group');
+          if (listIds(tests.fileSystemSynchronizedGroups)[0] !== prefix + '07') throw new Error('test synced group');
+          if (app.buildConfigurationList !== prefix + '14' || tests.buildConfigurationList !== prefix + '24') throw new Error('target config lists');
+          if (app.productReference !== prefix + '04' || tests.productReference !== prefix + '05') throw new Error('productReference');
+          if (listIds(tests.dependencies)[0] !== prefix + '28') throw new Error('test dependency');
+          const dep = get('28'), proxy = get('27');
+          if (dep.target !== prefix + '10' || dep.targetProxy !== prefix + '27') throw new Error('PBXTargetDependency');
+          if (proxy.containerPortal !== prefix + '01' || proxy.remoteGlobalIDString !== prefix + '10' || String(proxy.proxyType) !== '1') throw new Error('PBXContainerItemProxy');
+          for (const s of ['11','12','13','21','22','23']) { if ((get(s).files || []).length !== 0) throw new Error('phase ' + s + ' files not empty'); }
+          // configuration lists
+          const cl = (s, a, b) => { const l = get(s); if (JSON.stringify(listIds(l.buildConfigurations)) !== JSON.stringify([prefix + a, prefix + b])) throw new Error('config list ' + s); };
+          cl('30', '31', '32'); cl('14', '15', '16'); cl('24', '25', '26');
+          // build settings
+          const bs = (s) => get(s).buildSettings;
+          const must = (s, key, val) => { const got = strip(bs(s)[key]); if (got !== val) throw new Error(`…${s} ${key} = ${got}, expected ${val}`); };
+          must('31', 'ENABLE_TESTABILITY', 'YES'); must('31', 'IPHONEOS_DEPLOYMENT_TARGET', '17.0'); must('32', 'IPHONEOS_DEPLOYMENT_TARGET', '17.0');
+          if (bs('32').ENABLE_TESTABILITY !== undefined) throw new Error('ENABLE_TESTABILITY set in Release');
+          for (const s of ['15', '16']) {
+            must(s, 'PRODUCT_BUNDLE_IDENTIFIER', 'com.carwan.kilit'); must(s, 'SWIFT_VERSION', '5.0'); must(s, 'TARGETED_DEVICE_FAMILY', '1');
+            must(s, 'GENERATE_INFOPLIST_FILE', 'YES'); must(s, 'CODE_SIGN_ENTITLEMENTS', 'Kilit/Kilit.entitlements');
+            must(s, 'CODE_SIGN_STYLE', 'Automatic'); must(s, 'DEVELOPMENT_TEAM', ''); must(s, 'ENABLE_PREVIEWS', 'YES');
+            must(s, 'IPHONEOS_DEPLOYMENT_TARGET', '17.0'); must(s, 'INFOPLIST_KEY_UILaunchScreen_Generation', 'YES');
+            must(s, 'INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone', 'UIInterfaceOrientationPortrait');
+            for (const k of ['INFOPLIST_KEY_NSCameraUsageDescription', 'INFOPLIST_KEY_NSPhotoLibraryUsageDescription', 'INFOPLIST_KEY_NSFaceIDUsageDescription']) {
+              if (!bs(s)[k]) throw new Error('…' + s + ' missing ' + k);
+            }
+            if (bs(s).INFOPLIST_KEY_UIApplicationSceneManifest_Generation !== undefined) throw new Error('INFOPLIST_KEY_UIApplicationSceneManifest_Generation must not be set');
+          }
+          must('15', 'INFOPLIST_FILE', 'Kilit/Info-Debug.plist'); must('16', 'INFOPLIST_FILE', 'Kilit/Info-Release.plist');
+          for (const s of ['25', '26']) {
+            must(s, 'TEST_HOST', '$(BUILT_PRODUCTS_DIR)/Kilit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kilit');
+            must(s, 'BUNDLE_LOADER', '$(TEST_HOST)'); must(s, 'PRODUCT_BUNDLE_IDENTIFIER', 'com.carwan.kilit.tests'); must(s, 'SWIFT_VERSION', '5.0');
+          }
+          // INFOPLIST_FILE must point at existing files outside the synced folders
+          const iosDir = path.dirname(path.dirname(file));
+          for (const rel of ['Kilit/Info-Debug.plist', 'Kilit/Info-Release.plist', 'Kilit/Kilit.entitlements']) {
+            if (!fs.existsSync(path.join(iosDir, rel))) throw new Error('missing ' + rel);
+          }
+          console.log(`pbxproj OK: objectVersion 77, ${defined.size} objects defined, ${referenced.size} ids referenced, all 27 ids of §6 resolve, developmentRegion=tr, knownRegions=${regions.join(',')}`);
+          JS_EOF
+          cat > "$RUNNER_TEMP/validator/check_files.py" <<'PY_EOF'
+          #!/usr/bin/env python3
+          """Linux validators for the Kilit iOS tree (DESIGN.md §6, §8 WP6/WP8/WP9).
+          Usage: check_files.py <repo-root>   (exit 1 on the first failure class)
+          """
+          import json, os, plistlib, re, sys
+          import xml.etree.ElementTree as ET
+          import yaml
+
+          root = sys.argv[1]
+          ios = os.path.join(root, "ios")
+          errors = []
+
+          def ok(msg): print("OK   " + msg)
+          def fail(msg): errors.append(msg); print("FAIL " + msg)
+
+          # --- plists -------------------------------------------------------------------
+          plists = {}
+          for name in ("Kilit/Info-Debug.plist", "Kilit/Info-Release.plist", "Kilit/Kilit.entitlements"):
+              p = os.path.join(ios, name)
+              try:
+                  with open(p, "rb") as f:
+                      plists[name] = plistlib.load(f)
+                  ok(f"{name} parses ({len(plists[name])} top-level keys: {sorted(plists[name])})")
+              except Exception as e:  # noqa: BLE001
+                  fail(f"{name}: {e}")
+
+          INFOPLIST_KEY_SETTABLE = {  # keys that have an INFOPLIST_KEY_ build setting and must NOT be in the files
+              "NSCameraUsageDescription", "NSPhotoLibraryUsageDescription", "NSFaceIDUsageDescription",
+              "UILaunchScreen", "UISupportedInterfaceOrientations", "UISupportedInterfaceOrientations~iphone",
+              "UIApplicationSupportsIndirectInputEvents", "CFBundleDisplayName", "ITSAppUsesNonExemptEncryption",
+          }
+          for name in ("Kilit/Info-Debug.plist", "Kilit/Info-Release.plist"):
+              d = plists.get(name)
+              if d is None:
+                  continue
+              manifest = d.get("UIApplicationSceneManifest")
+              if manifest != {"UIApplicationSupportsMultipleScenes": False, "UISceneConfigurations": {}}:
+                  fail(f"{name}: scene manifest wrong: {manifest!r}")
+              else:
+                  ok(f"{name}: scene manifest present (UIApplicationSupportsMultipleScenes=false, empty UISceneConfigurations)")
+              if d.get("CADisableMinimumFrameDurationOnPhone") is not True:
+                  fail(f"{name}: CADisableMinimumFrameDurationOnPhone must be true")
+              else:
+                  ok(f"{name}: CADisableMinimumFrameDurationOnPhone = true")
+              dup = INFOPLIST_KEY_SETTABLE & set(d)
+              if dup:
+                  fail(f"{name}: keys duplicated with INFOPLIST_KEY_ settings: {sorted(dup)}")
+              if "NSPinnedDomains" in str(d):
+                  fail(f"{name}: NSPinnedDomains must not be committed")
+              if "ITSAppUsesNonExemptEncryption" in d:
+                  fail(f"{name}: ITSAppUsesNonExemptEncryption must not be present")
+          dbg, rel = plists.get("Kilit/Info-Debug.plist"), plists.get("Kilit/Info-Release.plist")
+          if dbg is not None and rel is not None:
+              if dbg.get("NSAppTransportSecurity") != {"NSAllowsLocalNetworking": True}:
+                  fail("Info-Debug.plist: NSAppTransportSecurity must be exactly {NSAllowsLocalNetworking: true}")
+              else:
+                  ok("Info-Debug.plist: NSAllowsLocalNetworking = true")
+              if "NSAppTransportSecurity" in rel:
+                  fail("Info-Release.plist must not carry NSAppTransportSecurity")
+              else:
+                  ok("Info-Release.plist: no NSAppTransportSecurity")
+          ent = plists.get("Kilit/Kilit.entitlements")
+          if ent is not None:
+              if ent != {"com.apple.developer.default-data-protection": "NSFileProtectionComplete"}:
+                  fail(f"Kilit.entitlements content: {ent!r}")
+              else:
+                  ok("Kilit.entitlements: default-data-protection = NSFileProtectionComplete, nothing else")
+
+          # --- XML: scheme and workspace data --------------------------------------------
+          scheme_path = os.path.join(ios, "Kilit.xcodeproj/xcshareddata/xcschemes/Kilit.xcscheme")
+          try:
+              tree = ET.parse(scheme_path)
+              blueprints = {e.get("BlueprintIdentifier") for e in tree.iter("BuildableReference")}
+              expect = {"4B494C495400000000000010", "4B494C495400000000000020"}
+              if blueprints != expect:
+                  fail(f"Kilit.xcscheme BlueprintIdentifiers {blueprints} != target ids {expect}")
+              ta = tree.getroot().find("TestAction")
+              if ta is None or ta.get("shouldAutocreateTestPlan") != "YES":
+                  fail("Kilit.xcscheme: TestAction.shouldAutocreateTestPlan must be YES")
+              containers = {e.get("ReferencedContainer") for e in tree.iter("BuildableReference")}
+              if containers != {"container:Kilit.xcodeproj"}:
+                  fail(f"Kilit.xcscheme ReferencedContainer {containers}")
+              if not errors:
+                  ok(f"Kilit.xcscheme parses; BlueprintIdentifiers = target ids {sorted(blueprints)}; shouldAutocreateTestPlan=YES")
+          except Exception as e:  # noqa: BLE001
+              fail(f"Kilit.xcscheme: {e}")
+          ws_path = os.path.join(ios, "Kilit.xcodeproj/project.xcworkspace/contents.xcworkspacedata")
+          try:
+              t = ET.parse(ws_path)
+              refs = [e.get("location") for e in t.iter("FileRef")]
+              if refs != ["self:"]:
+                  fail(f"contents.xcworkspacedata FileRefs {refs}")
+              else:
+                  ok("contents.xcworkspacedata parses (single self: FileRef)")
+          except Exception as e:  # noqa: BLE001
+              fail(f"contents.xcworkspacedata: {e}")
+
+          # --- YAML: XcodeGen spec ----------------------------------------------------------
+          try:
+              with open(os.path.join(ios, "project.yml"), encoding="utf-8") as f:
+                  spec = yaml.safe_load(f)
+              tg = spec["targets"]
+              assert spec["name"] == "Kilit"
+              assert spec["options"]["developmentLanguage"] == "tr"
+              assert spec["options"]["projectFormat"] == "xcode16_0"
+              assert tg["Kilit"]["sources"] == [{"path": "Kilit/Sources", "type": "syncedFolder"}]
+              assert tg["KilitTests"]["sources"] == [{"path": "Kilit/Tests", "type": "syncedFolder"}]
+              assert tg["KilitTests"]["type"] == "bundle.unit-test"
+              assert tg["KilitTests"]["dependencies"] == [{"target": "Kilit"}]
+              assert tg["Kilit"]["scheme"]["testTargets"] == ["KilitTests"]
+              st = tg["Kilit"]["settings"]
+              assert set(st) == {"base", "configs"}, "app settings must be base:+configs: only"
+              assert st["configs"]["Debug"]["INFOPLIST_FILE"] == "Kilit/Info-Debug.plist"
+              assert st["configs"]["Release"]["INFOPLIST_FILE"] == "Kilit/Info-Release.plist"
+              assert st["base"]["CODE_SIGN_ENTITLEMENTS"] == "Kilit/Kilit.entitlements"
+              assert "INFOPLIST_KEY_UIApplicationSceneManifest_Generation" not in st["base"]
+              assert set(spec["settings"]) <= {"base", "configs"}
+              ok("project.yml parses; syncedFolder sources Kilit/Sources + Kilit/Tests; base:/configs: settings; per-config INFOPLIST_FILE")
+          except Exception as e:  # noqa: BLE001
+              fail(f"project.yml: {e!r}")
+
+          # --- string catalog ---------------------------------------------------------------
+          cat_path = os.path.join(ios, "Kilit/Sources/Resources/Localizable.xcstrings")
+          strict_catalog = os.environ.get("KILIT_REQUIRE_CATALOG", "1") == "1"
+          if not os.path.exists(cat_path):
+              (fail if strict_catalog else ok)(f"Localizable.xcstrings missing at {cat_path}" + ("" if strict_catalog else " (skipped: not yet written)"))
+          else:
+              try:
+                  with open(cat_path, encoding="utf-8") as f:
+                      raw = f.read()
+                  cat = json.loads(raw)
+                  assert cat.get("sourceLanguage") == "tr", "sourceLanguage must be tr"
+                  bad = []
+                  for key, entry in cat["strings"].items():
+                      locs = entry.get("localizations", {})
+                      for lang in ("tr", "en"):
+                          v = locs.get(lang, {}).get("stringUnit", {}).get("value")
+                          if not v:
+                              bad.append(f"{key}:{lang}")
+                  if bad:
+                      fail(f"Localizable.xcstrings: keys missing tr/en units: {bad[:20]}")
+                  hits = [m.start() for m in re.finditer(r"%[0-9]*\$?d\b", raw)]
+                  if hits:
+                      fail(f"Localizable.xcstrings: '%d' integer placeholders found ({len(hits)}); use %lld")
+                  if not bad and not hits:
+                      ok(f"Localizable.xcstrings parses: {len(cat['strings'])} keys, every key has tr+en, no %d")
+              except Exception as e:  # noqa: BLE001
+                  fail(f"Localizable.xcstrings: {e!r}")
+
+          # --- grep gates (DESIGN.md §8 WP6/WP8; comments stripped) -----------------------
+          ALLOWED_IMPORTS = {
+              "Foundation", "UIKit", "SwiftUI", "Observation", "CryptoKit", "Security", "LocalAuthentication",
+              "AVFoundation", "CoreMedia", "CoreVideo", "ImageIO", "CoreGraphics", "MediaAccessibility", "PhotosUI",
+              "OSLog", "XCTest", "QuartzCore", "Combine", "Kilit",
+          }
+          def strip_comments(src: str) -> str:
+              src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+              return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
+
+          GATES = [  # (regex, human name, allowed file basenames)
+              (r"disableUpdateMask", "KVC disableUpdateMask", set()),
+              (r"UIScreen\.main\b", "UIScreen.main", set()),
+              (r"\.onLongPressGesture\b", "onLongPressGesture (reveal must use UILongPressGestureRecognizer)", set()),
+              (r"\.textSelection\(", ".textSelection", set()),
+              (r"\.contextMenu\b", "contextMenu", set()),
+              (r"\.onDrag\b|\.draggable\(", "onDrag/draggable", set()),
+              (r"UIActivityViewController", "UIActivityViewController", set()),
+              (r"QLPreviewController", "QLPreviewController", set()),
+              (r"UIImage\(contentsOfFile:", "UIImage(contentsOfFile:)", set()),
+              (r"ImageAnalysisInteraction", "ImageAnalysisInteraction", set()),
+              (r"CSSearchableIndex", "CSSearchableIndex", set()),
+              (r"NSUserActivity", "NSUserActivity", set()),
+              (r"(?<![A-Za-z_.])print\(", "print(", set()),
+              # SafetyNumberView draws the safety-number QR code with Canvas; that is not blur-based hiding.
+              (r"\bCanvas\s*[({]", "SwiftUI Canvas (blur-based hiding is forbidden)", {"SafetyNumberView.swift"}),
+              (r"UIWindowScene\.screenshotService|\.screenshotService\b", "screenshotService", set()),
+              (r"nonisolated\(unsafe\)", "nonisolated(unsafe)", set()),
+          ]
+          swift_files = []
+          for base in (os.path.join(ios, "Kilit/Sources"), os.path.join(ios, "Kilit/Tests")):
+              for dp, _, fns in os.walk(base):
+                  for fn in fns:
+                      if fn.endswith(".swift"):
+                          swift_files.append(os.path.join(dp, fn))
+          gate_hits = []
+          for path in sorted(swift_files):
+              with open(path, encoding="utf-8") as f:
+                  raw = f.read()
+              code = strip_comments(raw)
+              relp = os.path.relpath(path, root)
+              for pat, name, allowed in GATES:
+                  if os.path.basename(path) in allowed:
+                      continue
+                  for m in re.finditer(pat, code):
+                      line = code.count("\n", 0, m.start()) + 1
+                      gate_hits.append(f"{relp}:{line}: {name}")
+              # setValue(_:forKey:) only in CaptureShield.swift and only with "layer"
+              for m in re.finditer(r"setValue\([^\n]*?forKey:\s*(\"[^\"]*\")", code):
+                  line = code.count("\n", 0, m.start()) + 1
+                  if os.path.basename(path) != "CaptureShield.swift" or m.group(1) != '"layer"':
+                      gate_hits.append(f"{relp}:{line}: setValue(_:forKey:) outside CaptureShield.swift or key != \"layer\"")
+              for m in re.finditer(r"^\s*(?:@testable\s+)?import\s+([A-Za-z_][A-Za-z0-9_]*)", code, flags=re.M):
+                  if m.group(1) not in ALLOWED_IMPORTS:
+                      line = code.count("\n", 0, m.start()) + 1
+                      gate_hits.append(f"{relp}:{line}: non-Apple/third-party import {m.group(1)}")
+              # Generated vector literals (Tests/Vectors/) are JSON in raw strings; the
+              # design bounds them by size (<= 200 KB each, DESIGN.md §3.8), not by lines.
+              if os.sep + "Vectors" + os.sep in path:
+                  if len(raw.encode("utf-8")) > 200 * 1024:
+                      gate_hits.append(f"{relp}: generated vector file > 200 KB")
+              elif len(raw.splitlines()) > 500:
+                  gate_hits.append(f"{relp}: {len(raw.splitlines())} lines > 500")
+          if gate_hits:
+              for h in gate_hits:
+                  fail("grep gate: " + h)
+          else:
+              ok(f"grep gates: {len(swift_files)} Swift files clean (WP6/WP8 forbidden APIs, print(, third-party imports, setValue only in CaptureShield with \"layer\", <= 500 lines)")
+
+          # Nothing of WP9's may sit inside the synced folders.
+          for base in ("Kilit/Sources", "Kilit/Tests"):
+              for dp, _, fns in os.walk(os.path.join(ios, base)):
+                  for fn in fns:
+                      if fn in ("Info.plist", "Info-Debug.plist", "Info-Release.plist", "Kilit.entitlements", "README.md"):
+                          fail(f"{base}/{fn} must not live inside a synchronized folder")
+
+          if errors:
+              print(f"\n{len(errors)} problem(s)")
+              sys.exit(1)
+          print("\nall checks passed")
+          PY_EOF
+
+      - name: pbxproj parses and the 27 ids of §6 resolve
+        run: NODE_PATH="$RUNNER_TEMP/validator/node_modules" node "$RUNNER_TEMP/validator/check_pbxproj.js" "$GITHUB_WORKSPACE/ios/Kilit.xcodeproj/project.pbxproj"
+
+      - name: plists, scheme, workspace, project.yml, string catalog, grep gates
+        run: python3 -I "$RUNNER_TEMP/validator/check_files.py" "$GITHUB_WORKSPACE"
