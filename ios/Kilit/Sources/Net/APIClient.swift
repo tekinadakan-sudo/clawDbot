@@ -269,9 +269,9 @@ actor APIClient {
         guard let tok = token else { return nil }
         var text: String = origin
         if text.hasPrefix("https://") {
-            text = "wss://" + text.dropFirst("https://".count)
+            text = "wss://" + String(text.dropFirst("https://".count))
         } else if text.hasPrefix("http://") {
-            text = "ws://" + text.dropFirst("http://".count)
+            text = "ws://" + String(text.dropFirst("http://".count))
         }
         guard let url = URL(string: text + "/v1/ws") else { return nil }
         var req: URLRequest = URLRequest(url: url)
