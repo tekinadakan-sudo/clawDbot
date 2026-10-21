@@ -12,7 +12,9 @@ import (
 	"github.com/tekinadakan-sudo/clawDbot/server/internal/ws"
 )
 
-// POST /v1/messages: {to, msg_id, envelope} → 202 {id}; INSERT then Notifier.Notify.
+// POST /v1/messages: {to, msg_id, envelope} → 202 {id}; INSERT then Notifier.Notify, both under
+// sendMu so live frames are enqueued in id order (see server.sendMu). The live frame carries the
+// same ts the row stores (NewMessage.CreatedAt), so the WS and the poll path emit identical rows.
 func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 	p, _ := authctx.PrincipalFrom(r.Context())
 	var req struct {
@@ -58,14 +60,20 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.now()
+	s.sendMu.Lock()
 	id, existing, err := s.st.InsertMessage(ctx, store.NewMessage{
 		MsgID:          msgID,
 		SenderID:       p.UserID,
 		SenderUsername: p.Username,
 		RecipientID:    rcpt.ID,
 		Envelope:       envelope,
+		CreatedAt:      now.Unix(),
 		ExpiresAt:      now.Add(s.cfg.MsgTTL).Unix(),
 	})
+	if err == nil && !existing && s.n != nil {
+		s.n.Notify(rcpt.ID, ws.Delivery{ID: id, MsgID: req.MsgID, From: p.Username, Envelope: envelope, TS: now.Unix()})
+	}
+	s.sendMu.Unlock()
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrMsgIDConflict):
@@ -79,9 +87,6 @@ func (s *server) handleSend(w http.ResponseWriter, r *http.Request) {
 			writeInternal(w)
 		}
 		return
-	}
-	if !existing && s.n != nil {
-		s.n.Notify(rcpt.ID, ws.Delivery{ID: id, MsgID: req.MsgID, From: p.Username, Envelope: envelope, TS: now.Unix()})
 	}
 	writeJSON(w, http.StatusAccepted, struct {
 		ID int64 `json:"id"`

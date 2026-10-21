@@ -37,18 +37,20 @@ func TestDefaultsRequireOrigin(t *testing.T) {
 
 func TestEnvOverridesAndFlagsWin(t *testing.T) {
 	e := env(map[string]string{
-		"KILIT_PUBLIC_ORIGIN":    "https://env.example.com",
-		"KILIT_ADDR":             ":9090",
-		"KILIT_MSG_TTL":          "48h",
-		"KILIT_WS_QUERY_TOKEN":   "yes",
-		"KILIT_TRUSTED_PROXY":    "172.28.0.0/16, 10.0.0.1/32",
-		"KILIT_LOG_LEVEL":        "debug",
-		"KILIT_QUEUE_CAP":        "100",
-		"KILIT_SENDER_QUEUE_CAP": "10",
-		"KILIT_MAX_UPLOAD":       "123",
-		"KILIT_MAX_ENVELOPE":     "456",
-		"KILIT_DB":               "/tmp/x.db",
-		"KILIT_BLOBS":            "/tmp/blobs",
+		"KILIT_PUBLIC_ORIGIN":       "https://env.example.com",
+		"KILIT_ADDR":                ":9090",
+		"KILIT_MSG_TTL":             "48h",
+		"KILIT_WS_QUERY_TOKEN":      "yes",
+		"KILIT_TRUSTED_PROXY":       "172.28.0.0/16, 10.0.0.1/32",
+		"KILIT_LOG_LEVEL":           "debug",
+		"KILIT_QUEUE_CAP":           "100",
+		"KILIT_SENDER_QUEUE_CAP":    "10",
+		"KILIT_MAX_UPLOAD":          "123",
+		"KILIT_MAX_ENVELOPE":        "456",
+		"KILIT_MAX_USER_BLOBS":      "7",
+		"KILIT_MAX_USER_BLOB_BYTES": "4096",
+		"KILIT_DB":                  "/tmp/x.db",
+		"KILIT_BLOBS":               "/tmp/blobs",
 	})
 	cfg, err := Parse(nil, e, io.Discard)
 	if err != nil {
@@ -56,7 +58,8 @@ func TestEnvOverridesAndFlagsWin(t *testing.T) {
 	}
 	if cfg.PublicOrigin != "https://env.example.com" || cfg.Addr != ":9090" || cfg.MsgTTL != 48*time.Hour ||
 		cfg.BlobTTL != 72*time.Hour || !cfg.WSQueryToken || cfg.LogLevel != "debug" || cfg.QueueCap != 100 ||
-		cfg.SenderQueueCap != 10 || cfg.MaxUpload != 123 || cfg.MaxEnvelope != 456 || cfg.DB != "/tmp/x.db" || cfg.Blobs != "/tmp/blobs" {
+		cfg.SenderQueueCap != 10 || cfg.MaxUpload != 123 || cfg.MaxEnvelope != 456 || cfg.MaxUserBlobs != 7 ||
+		cfg.MaxUserBlobBytes != 4096 || cfg.DB != "/tmp/x.db" || cfg.Blobs != "/tmp/blobs" {
 		t.Fatalf("env: %+v", cfg)
 	}
 	if len(cfg.TrustedProxy) != 2 || cfg.TrustedProxy[0].String() != "172.28.0.0/16" || cfg.TrustedProxy[1].String() != "10.0.0.1/32" {
@@ -119,6 +122,8 @@ func TestValidation(t *testing.T) {
 		"unknown flag":          append(origin, "-nope"),
 		"positional":            append(origin, "extra"),
 		"negative upload":       append(origin, "-max-upload", "-1"),
+		"zero user blobs":       append(origin, "-max-user-blobs", "0"),
+		"blob quota under cap":  append(origin, "-max-user-blob-bytes", "1024"),
 		"zero ttl":              append(origin, "-msg-ttl", "0"),
 		"empty db":              append(origin, "-db", ""),
 	}
@@ -133,6 +138,7 @@ func TestValidation(t *testing.T) {
 		{"-public-origin", "http://127.0.0.1:8080"},
 		append(origin, "-log-level", "WARN"),
 		append(origin, "-trusted-proxy", "172.28.0.0/16,fd00::/8"),
+		append(origin, "-max-user-blobs", "1", "-max-user-blob-bytes", "8388629"),
 	}
 	for _, args := range ok {
 		if _, err := Parse(args, env(nil), io.Discard); err != nil {

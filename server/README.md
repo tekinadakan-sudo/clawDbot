@@ -48,6 +48,8 @@ flags win over the environment. Boolean values accept `1/true/yes` and `0/false/
 | `-blob-ttl` | `KILIT_BLOB_TTL` | `msg-ttl + 24h` | attachment lifetime; startup refuses anything lower |
 | `-max-upload` | `KILIT_MAX_UPLOAD` | `8388629` | attachment cap in bytes (8 MiB + 21) |
 | `-max-envelope` | `KILIT_MAX_ENVELOPE` | `65536` | decoded envelope cap in bytes |
+| `-max-user-blobs` | `KILIT_MAX_USER_BLOBS` | `64` | live attachments one user may hold (as owner or recipient); beyond it uploads get `429 attachment_quota` |
+| `-max-user-blob-bytes` | `KILIT_MAX_USER_BLOB_BYTES` | `268435456` | total size of those attachments (256 MiB; must be ≥ `-max-upload`) |
 | `-queue-cap` | `KILIT_QUEUE_CAP` | `5000` | queued messages per recipient |
 | `-sender-queue-cap` | `KILIT_SENDER_QUEUE_CAP` | `500` | queued messages per (sender, recipient) |
 | `-trusted-proxy` | `KILIT_TRUSTED_PROXY` | *(none)* | CIDR list whose `X-Forwarded-For` is honoured for per-IP limits |

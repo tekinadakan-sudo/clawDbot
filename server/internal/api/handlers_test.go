@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -132,6 +135,10 @@ func TestFullFlow(t *testing.T) {
 	m := msgs[0].(map[string]any)
 	if m["id"].(float64) != rowID || m["msg_id"] != id1 || m["from"] != "alice" || m["envelope"] != auth.B64.EncodeToString(env1) || m["ts"] == nil {
 		t.Fatalf("msg %v", m)
+	}
+	// the live frame and the polled row carry the same ts (one row, one clock)
+	if m["ts"].(float64) != float64(e.nf.notifies[0].TS) || e.nf.notifies[0].TS != e.clock.Now().Unix() {
+		t.Fatalf("live ts %d, polled ts %v, clock %d", e.nf.notifies[0].TS, m["ts"], e.clock.Now().Unix())
 	}
 	// the sender does not see it
 	st, out = alice.call("GET", "/v1/messages", nil, nil)
@@ -284,17 +291,17 @@ func TestLoginErrors(t *testing.T) {
 	st, out = anon.call("POST", "/v1/auth/login", alice.loginBody(nonce, ts+61, testOrigin), nil)
 	expect(t, st, out, 401, "nonce_invalid")
 
-	// origin mismatch
+	// origin mismatch (login-specific 401, §4.3.2 login row / §4.5; register keeps 400)
 	nonce, ts = alice.challenge()
 	st, out = anon.call("POST", "/v1/auth/login", alice.loginBody(nonce, ts, "https://evil.example.com"), nil)
-	expect(t, st, out, 400, "bad_signature")
+	expect(t, st, out, 401, "bad_signature")
 
 	// bad signature (another key)
 	mallory := e.newIdentity("alice")
 	mallory.device = alice.device
 	nonce, ts = alice.challenge()
 	st, out = anon.call("POST", "/v1/auth/login", mallory.loginBody(nonce, ts, testOrigin), nil)
-	expect(t, st, out, 400, "bad_signature")
+	expect(t, st, out, 401, "bad_signature")
 
 	// clock skew
 	nonce, ts = alice.challenge()
@@ -308,11 +315,11 @@ func TestLoginErrors(t *testing.T) {
 	st, out = anon.call("POST", "/v1/auth/login", alice.loginBody(nonce, ts-300, testOrigin), nil)
 	expect(t, st, out, 200, "")
 
-	// unknown user with a valid nonce
+	// unknown user with a valid nonce (401 on login, so a deleted identity returns to onboarding)
 	ghost := e.newIdentity("ghost")
 	nonce, ts = ghost.challenge()
 	st, out = anon.call("POST", "/v1/auth/login", ghost.loginBody(nonce, ts, testOrigin), nil)
-	expect(t, st, out, 404, "unknown_user")
+	expect(t, st, out, 401, "unknown_user")
 
 	// unauthenticated access
 	st, out = anon.call("GET", "/v1/users/alice", nil, nil)
@@ -718,6 +725,38 @@ func TestPutPrekeys(t *testing.T) {
 	if out["spk"].(map[string]any)["id"].(float64) != 2 {
 		t.Fatalf("spk %v", out)
 	}
+	// the whole request is one transaction: an SPK rotation whose OPK batch fails (bob's fetch
+	// consumed id 1; or more than 500 would be stored) leaves the old SPK in place, and the same
+	// rotation then succeeds on retry instead of failing with spk_not_monotonic
+	for _, bad := range []struct {
+		code   string
+		status int
+		spkID  uint32
+		opks   []map[string]any
+		sig    string
+	}{
+		{"opk_exists", 409, 7, dupOPKs, dupSig},
+		{"too_many_opks", 400, 8, nil, ""},
+	} {
+		if bad.opks == nil {
+			bad.opks, bad.sig = alice.opkBatch(400)
+		}
+		st, before := alice.call("GET", "/v1/prekeys/count", nil, nil)
+		expect(t, st, before, 200, "")
+		st, out = alice.call("PUT", "/v1/prekeys", map[string]any{"spk": alice.spk(bad.spkID, e.clock.Now().Unix()), "opks": bad.opks, "opks_sig": bad.sig}, nil)
+		expect(t, st, out, bad.status, bad.code)
+		st, after := alice.call("GET", "/v1/prekeys/count", nil, nil)
+		expect(t, st, after, 200, "")
+		if after["spk_id"] != before["spk_id"] || after["opk_count"] != before["opk_count"] {
+			t.Fatalf("%s committed the SPK or OPKs: before %v after %v", bad.code, before, after)
+		}
+		opks, sig = alice.opkBatch(1)
+		st, out = alice.call("PUT", "/v1/prekeys", map[string]any{"spk": alice.spk(bad.spkID, e.clock.Now().Unix()), "opks": opks, "opks_sig": sig}, nil)
+		expect(t, st, out, 200, "")
+		if out["spk_id"].(float64) != float64(bad.spkID) || out["opk_count"].(float64) != before["opk_count"].(float64)+1 {
+			t.Fatalf("retry %v", out)
+		}
+	}
 }
 
 func signOPKs(c *client, batch []auth.OPK) []byte {
@@ -740,8 +779,10 @@ func TestPushToken(t *testing.T) {
 }
 
 func TestTrustedProxy(t *testing.T) {
-	// With the loopback as a trusted proxy, X-Forwarded-For values get separate buckets.
-	prefixes, _ := config.ParseCIDRs("127.0.0.0/8,::1/128")
+	// With the loopback and 10.0.0.0/8 as trusted proxies, the client is the rightmost
+	// X-Forwarded-For hop that is not a trusted proxy: "203.0.113.5, 10.0.0.1" → 203.0.113.5, and
+	// X-Forwarded-For values get separate buckets.
+	prefixes, _ := config.ParseCIDRs("127.0.0.0/8,::1/128,10.0.0.0/8")
 	e := newEnv(t, func(c *config.Config) { c.TrustedProxy = prefixes }, store.Options{}, nil)
 	anon := &client{e: e}
 	a := map[string]string{"X-Forwarded-For": "203.0.113.5, 10.0.0.1"}
@@ -759,6 +800,31 @@ func TestTrustedProxy(t *testing.T) {
 	}
 	if !strings.Contains(e.logs.String(), `"ip":"203.0.113.0/24"`) {
 		t.Fatalf("truncated client ip missing from logs: %s", e.logs.String())
+	}
+	if strings.Contains(e.logs.String(), `"ip":"10.0.0.0/24"`) {
+		t.Fatal("a trusted proxy hop was logged as the client")
+	}
+
+	// With only the loopback trusted, 10.0.0.1 is the rightmost untrusted hop and 203.0.113.5 is
+	// a client-supplied value: spoofing a fresh leftmost address per request must not split the
+	// bucket, and a header made only of trusted hops falls back to RemoteAddr.
+	loop, _ := config.ParseCIDRs("127.0.0.0/8,::1/128")
+	e3 := newEnv(t, func(c *config.Config) { c.TrustedProxy = loop }, store.Options{}, nil)
+	anon3 := &client{e: e3}
+	for i := 0; i < 10; i++ {
+		spoof := map[string]string{"X-Forwarded-For": fmt.Sprintf("203.0.113.%d, 10.0.0.1", i)}
+		st, out := anon3.call("POST", "/v1/auth/challenge", map[string]any{"username": "alice"}, spoof)
+		expect(t, st, out, 200, "")
+	}
+	st, out = anon3.call("POST", "/v1/auth/challenge", map[string]any{"username": "alice"}, a)
+	expect(t, st, out, 429, "rate_limited")
+	st, out = anon3.call("POST", "/v1/auth/challenge", map[string]any{"username": "alice"}, map[string]string{"X-Forwarded-For": "127.0.0.9"})
+	expect(t, st, out, 200, "")
+	if strings.Contains(e3.logs.String(), "203.0.113") {
+		t.Fatal("a client-supplied X-Forwarded-For hop leaked into logs")
+	}
+	if !strings.Contains(e3.logs.String(), `"ip":"10.0.0.0/24"`) || !strings.Contains(e3.logs.String(), `"ip":"127.0.0.0/24"`) {
+		t.Fatalf("rightmost untrusted hop / RemoteAddr fallback missing from logs: %s", e3.logs.String())
 	}
 
 	// Without a trusted proxy the header is ignored (shared bucket) and the warning is logged once per minute.
@@ -841,14 +907,130 @@ func TestRecoverMiddleware(t *testing.T) {
 func TestLoggingNeverPairsUsernameWithIP(t *testing.T) {
 	e := newEnv(t, nil, store.Options{}, nil)
 	alice := e.register("alice")
-	alice.call("GET", "/v1/users/alice", nil, nil)
+	bob := e.register("bob")
+	alice.call("GET", "/v1/users/bob", nil, nil)
+	alice.call("GET", "/v1/users/bob/prekeys", nil, nil)
+	alice.call("GET", "/v1/nope", nil, nil)
 	logs := e.logs.String()
-	if strings.Contains(logs, alice.token) {
+	if strings.Contains(logs, alice.token) || strings.Contains(logs, bob.token) {
 		t.Fatal("token leaked into logs")
 	}
+	// the request line logs the route pattern, never the path with its {username} segment
 	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, `"ip":`) && strings.Contains(line, `"alice"`) {
+		if strings.Contains(line, `"ip":`) && (strings.Contains(line, "alice") || strings.Contains(line, "bob")) {
 			t.Fatalf("username paired with ip: %s", line)
 		}
+	}
+	for _, want := range []string{`"path":"GET /v1/users/{username}"`, `"path":"GET /v1/users/{username}/prekeys"`, `"path":"-"`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("%s missing from logs: %s", want, logs)
+		}
+	}
+}
+
+// Without a request deadline a peer trickling its body would hold the goroutine (and, on upload,
+// an open blob file) forever; the per-route deadlines answer 408 and release everything.
+func TestSlowBodyTimesOut(t *testing.T) {
+	e := newEnvWith(t, nil, store.Options{}, nil, func(s *server) {
+		s.bodyTimeout = 300 * time.Millisecond
+		s.transferTimeout = 300 * time.Millisecond
+	})
+	alice := e.register("alice")
+	id := randHex(16)
+	cases := []struct {
+		name, head string
+	}{
+		{"json", "POST /v1/auth/challenge HTTP/1.1\r\nHost: kilit\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n"},
+		{"upload", "POST /v1/attachments/" + id + " HTTP/1.1\r\nHost: kilit\r\nAuthorization: Bearer " + alice.token +
+			"\r\nX-Kilit-Recipient: alice\r\nContent-Type: application/octet-stream\r\nContent-Length: 1000\r\n\r\n"},
+	}
+	for _, c := range cases {
+		conn, err := net.Dial("tcp", e.srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := io.WriteString(conn, c.head+`{"user`); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		conn.Close()
+		if resp.StatusCode != http.StatusRequestTimeout || !strings.Contains(string(body), "request_timeout") {
+			t.Fatalf("%s: %d %s", c.name, resp.StatusCode, body)
+		}
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("%s: 408 took %s", c.name, d)
+		}
+	}
+	if fileExists(blobPath(e.blobDir, id)) {
+		t.Fatal("timed-out upload left a blob file")
+	}
+	// a normal request on a fresh connection is unaffected
+	st, out := alice.call("GET", "/v1/prekeys/count", nil, nil)
+	expect(t, st, out, 200, "")
+}
+
+// One account must not be able to fill the shared /data volume: live blobs are capped per user
+// (as owner or recipient) by count and by bytes, and both are freed by delete and by expiry.
+func TestAttachmentQuota(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.MaxUserBlobs = 3; c.MaxUserBlobBytes = 2 * 8388629 }, store.Options{}, nil)
+	alice := e.register("alice")
+	bob := e.register("bob")
+	e.register("carol")
+	toBob := map[string]string{"X-Kilit-Recipient": "bob"}
+	toCarol := map[string]string{"X-Kilit-Recipient": "carol"}
+	// byte cap: two full-size blobs reach 2 × max-upload, the third is refused
+	full := bytes.Repeat([]byte{1}, 8388629)
+	ids := []string{randHex(16), randHex(16)}
+	for _, id := range ids {
+		st, out := alice.upload(id, full, toBob)
+		expect(t, st, out, 201, "")
+	}
+	st, out := alice.upload(randHex(16), []byte("x"), toCarol)
+	expect(t, st, out, 429, "attachment_quota")
+	// freeing one (the recipient deletes after download) lifts the byte cap
+	if st, _ := bob.call("DELETE", "/v1/attachments/"+ids[0], nil, nil); st != 204 {
+		t.Fatalf("delete %d", st)
+	}
+	st, out = alice.upload(randHex(16), []byte("x"), toCarol)
+	expect(t, st, out, 201, "")
+	// count cap: alice now holds 2 as owner; a third is fine, a fourth is not
+	st, out = alice.upload(randHex(16), []byte("x"), toCarol)
+	expect(t, st, out, 201, "")
+	st, out = alice.upload(randHex(16), []byte("x"), toCarol)
+	expect(t, st, out, 429, "attachment_quota")
+	// the recipient's quota counts too: carol holds 2 received blobs; bob sends her a 3rd, then
+	// cannot stuff a 4th
+	st, out = bob.upload(randHex(16), []byte("x"), toCarol)
+	expect(t, st, out, 201, "")
+	st, out = bob.upload(randHex(16), []byte("x"), toCarol)
+	expect(t, st, out, 429, "attachment_quota")
+	// received blobs count against the holder (bob: 1 received + 1 sent, a 3rd fills him up, the
+	// 4th is refused) until deleted
+	dave := e.register("dave")
+	toDave := map[string]string{"X-Kilit-Recipient": "dave"}
+	st, out = bob.upload(randHex(16), []byte("x"), toDave)
+	expect(t, st, out, 201, "")
+	st, out = bob.upload(randHex(16), []byte("x"), toDave)
+	expect(t, st, out, 429, "attachment_quota")
+	if st, _ := bob.call("DELETE", "/v1/attachments/"+ids[1], nil, nil); st != 204 {
+		t.Fatalf("delete %d", st)
+	}
+	st, out = bob.upload(randHex(16), []byte("x"), toDave)
+	expect(t, st, out, 201, "")
+	// refused uploads leave neither rows nor files behind
+	n, size, err := e.st.AttachmentUsage(t.Context(), alice.uid)
+	if err != nil || n != 2 || size != 2 {
+		t.Fatalf("alice usage %d %d %v", n, size, err)
+	}
+	n, size, err = e.st.AttachmentUsage(t.Context(), dave.uid)
+	if err != nil || n != 2 || size != 2 {
+		t.Fatalf("dave usage %d %d %v", n, size, err)
 	}
 }

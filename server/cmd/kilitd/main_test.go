@@ -223,3 +223,53 @@ func TestRunDeleteUserSubcommand(t *testing.T) {
 		t.Fatalf("blob dir not created: %v", err)
 	}
 }
+
+// A backlog larger than one page (sustained uploads from ≥ 17 accounts) is drained in one tick,
+// up to maxSweepPages pages, instead of 500 per minute forever.
+func TestSweepDrainsBacklogBeyondOnePage(t *testing.T) {
+	f := newFixture(t)
+	alice := f.user("alice")
+	now := time.Now().Unix()
+	const n = store.DefaultExpiredAttachmentsLimit + 120
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ids = append(ids, f.attachment(alice, now-1, false))
+	}
+	live := f.attachment(alice, now+3600, false)
+	var logs bytes.Buffer
+	sweep(context.Background(), f.st, f.blobs, slog.New(slog.NewTextHandler(&logs, nil)), now)
+	for _, id := range ids {
+		if f.fileExists(id) || f.rowExists(id) {
+			t.Fatalf("expired attachment %s survived one tick (file=%v row=%v)", id, f.fileExists(id), f.rowExists(id))
+		}
+	}
+	if !f.fileExists(live) || !f.rowExists(live) {
+		t.Fatal("live attachment was touched")
+	}
+	if !strings.Contains(logs.String(), "attachments=620") {
+		t.Fatalf("sweep log: %s", logs.String())
+	}
+}
+
+// A cancelled tick stops quietly: no store call is attempted (no spurious errors), the rows are
+// retried next tick, and the file-before-row invariant is kept.
+func TestSweepStopsQuietlyWhenContextDone(t *testing.T) {
+	f := newFixture(t)
+	alice := f.user("alice")
+	now := time.Now().Unix()
+	expired := f.attachment(alice, now-1, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var logs bytes.Buffer
+	sweep(ctx, f.st, f.blobs, slog.New(slog.NewTextHandler(&logs, nil)), now)
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("cancelled sweep logged errors: %s", logs.String())
+	}
+	if !f.fileExists(expired) || !f.rowExists(expired) {
+		t.Fatal("cancelled sweep touched the attachment")
+	}
+	sweep(context.Background(), f.st, f.blobs, slog.New(slog.NewTextHandler(&logs, nil)), now)
+	if f.fileExists(expired) || f.rowExists(expired) {
+		t.Fatal("next tick did not sweep the attachment")
+	}
+}

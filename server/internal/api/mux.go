@@ -5,6 +5,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -69,6 +70,18 @@ type server struct {
 	bearer    *auth.Bearer
 	lim       *limiters
 	proxyWarn proxyWarner
+
+	// sendMu is held across InsertMessage + Notifier.Notify in handleSend so that live frames are
+	// enqueued in commit (id) order; without it two concurrent senders to one recipient can push
+	// id N+1 before id N, and the client cursor rule (§3.2b: cursor = max id, no redelivery of
+	// id ≤ after) then loses N for good if the socket drops in between. SQLite already serialises
+	// the writers, so the lock adds no contention.
+	sendMu sync.Mutex
+
+	// bodyTimeout bounds JSON routes (body read + response write); transferTimeout bounds the
+	// attachment upload and download. Tests shorten them.
+	bodyTimeout     time.Duration
+	transferTimeout time.Duration
 }
 
 // New builds the kilitd handler: every route of §4.3.2 with recover, request-id, logging, rate
@@ -95,6 +108,9 @@ func newServer(cfg config.Config, st *store.Store, blobs *blob.Store, wsHandler 
 		origin: origin,
 		bearer: &auth.Bearer{Store: st, Now: now, Log: log},
 		lim:    newLimiters(now),
+
+		bodyTimeout:     DefaultBodyTimeout,
+		transferTimeout: DefaultTransferTimeout,
 	}
 }
 
@@ -104,6 +120,7 @@ func (s *server) handler() http.Handler {
 	user := userKey
 	userIP := s.userIPKey
 	authed := func(h http.HandlerFunc) http.Handler { return s.bearer.Wrap(h, false) }
+	bodyCap := s.bodyCap
 	other := func(cap int64, h http.HandlerFunc) http.Handler {
 		return bodyCap(cap, authed(limit(s.lim.other, user, h).ServeHTTP))
 	}

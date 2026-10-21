@@ -254,7 +254,7 @@ Encodings: every byte string is **lowercase hex** unless the key name ends in `_
    {"op":"decrypt_expect_error","side":"B","session":"S1","hdr":"hex41","wire":"hex","error":"authenticationFailure","state_unchanged":true},
    {"op":"decrypt_expect_error","side":"B","session":"S1","dh_pub":"hex31","pn":0,"n":0,"wire":"hex","error":"badKeyLength","state_unchanged":true},   // direct ratchet-API call with a parsed header; "dh_pub"/"pn"/"n" replace "hdr"
    {"op":"advance_clock","seconds":86400},
-   {"op":"deliver_envelope","side":"B","from":"alice","msg_id":"hex16","envelope":{WIRE JSON},"expect":"stored|parked|classified","reason":"replay","expect_sending_sid":{"A":"hex8","B":"hex8"}},
+   {"op":"deliver_envelope","side":"B","from":"alice","msg_id":"hex16","envelope":{WIRE JSON},"expect":"stored|duplicate|already_processed|parked|classified","reason":"replay","expect_sending_sid":{"A":"hex8","B":"hex8"}},   // already_processed = outer msg_id already in processed_msg_ids (§3.2b step 0); duplicate = decrypted inner (author,id) already present, acked silently, no new row (§3.4)
    {"op":"send","side":"A","peer":"bob","inner":{INNER JSON},"expect_sid":"hex8","expect_kind":"prekey|msg","expect_resend_ids":["uuid"]},   // app-level send through the sending-session rule; expect_resend_ids lists ctrl.resync re-sends triggered by this step
    {"op":"expect_sending_sid","A":"hex8|null","B":"hex8|null"},
    {"op":"expect_messages","side":"B","peer":"alice","ids":[["me|peer","uuid"]]},    // the full ordered (author,id) set of that conversation
@@ -264,7 +264,7 @@ Encodings: every byte string is **lowercase hex** unless the key name ends in `_
    {"op":"lookup_result","side":"B","peer":"alice","result":"ok|mismatch|not_found|transient"},   // injected GET /v1/users result for the next TOFU lookup
    {"op":"consumed_report","side":"B","ids":[1203]},                                   // injected consumed_ids report at the current clock
    {"op":"inject_rollback","side":"B","session":"S1"},                                 // next load of that session file fails the generation check → S3
-   {"op":"delete_session","side":"B","session":"S1"},
+   {"op":"delete_session","side":"B","session":"S1","sid":"hex8","reason":"pruned|parse_failure|rollback"},   // reason is the known_sids deletedReason the runner must record: only parse_failure/rollback make a later unknown-sid msg initiate ctrl.resync (§3.2 S3)
    {"op":"accept_key_change","side":"B","peer":"alice"},
    {"op":"expect_mkskipped","side":"B","session":"S1","keys":[{"dh":"hex32","n":3}]},
    {"op":"expect_mkskipped","side":"B","session":"S1","count":1999,"mkskipped_sha256":"hex32"},   // form used when > 50 entries (§3.8)

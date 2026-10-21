@@ -26,6 +26,18 @@ func (s *Store) InsertAttachment(ctx context.Context, a NewAttachment) error {
 	return mapErr(err)
 }
 
+// AttachmentUsage returns how many live attachment rows reference userID as owner or as recipient
+// and their total size in bytes (the per-user storage quota checked before an upload).
+func (s *Store) AttachmentUsage(ctx context.Context, userID int64) (count int, bytes int64, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT count(*), coalesce(sum(size),0) FROM attachments WHERE owner_id=? OR recipient_id=?`,
+		userID, userID).Scan(&count, &bytes)
+	if err != nil {
+		return 0, 0, mapErr(err)
+	}
+	return count, bytes, nil
+}
+
 // GetAttachment returns the row for id. ErrNotFound.
 func (s *Store) GetAttachment(ctx context.Context, id string) (*Attachment, error) {
 	var a Attachment

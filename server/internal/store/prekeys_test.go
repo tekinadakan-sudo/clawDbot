@@ -233,3 +233,68 @@ func TestClaimThenLateSendRowIntact(t *testing.T) {
 		t.Fatalf("second claim: %+v %v", b2.OPK, err)
 	}
 }
+
+// PutPrekeys is one transaction: a failing OPK batch leaves the SPK uncommitted and vice versa.
+func TestPutPrekeysAtomic(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	alice := mkUser(t, s, "alice", 10) // SPK 1, OPK ids 1..10
+	spk := func(id uint32) *SignedPrekey {
+		return &SignedPrekey{KeyID: id, Pub: randBytes(32), Sig: randBytes(64), CreatedAt: int64(id)}
+	}
+	if err := s.PutPrekeys(ctx, alice, spk(2), opks(10, 2)); !errors.Is(err, ErrOPKExists) {
+		t.Fatalf("dup opk: %v", err)
+	}
+	if err := s.PutPrekeys(ctx, alice, spk(2), opks(11, 491)); !errors.Is(err, ErrTooManyOPKs) {
+		t.Fatalf("cap: %v", err)
+	}
+	if err := s.PutPrekeys(ctx, alice, spk(1), opks(11, 1)); !errors.Is(err, ErrSPKNotMonotonic) {
+		t.Fatalf("spk: %v", err)
+	}
+	cnt, spkID, _, err := s.PrekeyCount(ctx, alice)
+	if err != nil || cnt != 10 || spkID != 1 {
+		t.Fatalf("something was committed: count=%d spk=%d %v", cnt, spkID, err)
+	}
+	// the same rotation then succeeds on retry
+	if err := s.PutPrekeys(ctx, alice, spk(2), opks(11, 5)); err != nil {
+		t.Fatal(err)
+	}
+	cnt, spkID, _, err = s.PrekeyCount(ctx, alice)
+	if err != nil || cnt != 15 || spkID != 2 {
+		t.Fatalf("after retry: count=%d spk=%d %v", cnt, spkID, err)
+	}
+	if err := s.PutPrekeys(ctx, alice, nil, nil); err != nil {
+		t.Fatalf("empty request: %v", err)
+	}
+	if err := s.PutPrekeys(ctx, 999, spk(1), nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown user: %v", err)
+	}
+}
+
+// consumed_ids is a refill signal, capped at the newest MaxConsumedIDs claims (oldest first).
+func TestPrekeyCountCapsConsumedIDs(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	alice := mkUser(t, s, "alice", 0)
+	const extra = 250
+	for i := 0; i < MaxConsumedIDs+extra; i++ {
+		// key ids descend as claims get newer, so the cap is visibly by claim time, not by id
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO consumed_opks(user_id, key_id, claimed_at) VALUES(?,?,?)`,
+			alice, 100000-i, 1000+i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, consumed, err := s.PrekeyCount(ctx, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(consumed) != MaxConsumedIDs {
+		t.Fatalf("got %d ids, want %d", len(consumed), MaxConsumedIDs)
+	}
+	// the newest MaxConsumedIDs claims, oldest of them first
+	for i, k := range consumed {
+		if want := uint32(100000 - (extra + i)); k != want {
+			t.Fatalf("consumed[%d] = %d, want %d", i, k, want)
+		}
+	}
+}

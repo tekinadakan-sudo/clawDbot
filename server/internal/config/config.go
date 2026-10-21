@@ -20,20 +20,22 @@ const EnvPrefix = "KILIT_"
 
 // Config is the runtime configuration of kilitd.
 type Config struct {
-	Addr           string         // -addr
-	PublicOrigin   string         // -public-origin (required; used in signed messages)
-	DB             string         // -db
-	Blobs          string         // -blobs
-	MsgTTL         time.Duration  // -msg-ttl
-	BlobTTL        time.Duration  // -blob-ttl (default MsgTTL + 24h; must be ≥ that)
-	MaxUpload      int64          // -max-upload (bytes)
-	MaxEnvelope    int            // -max-envelope (decoded bytes)
-	QueueCap       int            // -queue-cap
-	SenderQueueCap int            // -sender-queue-cap
-	TrustedProxy   []netip.Prefix // -trusted-proxy (comma-separated CIDR list)
-	WSQueryToken   bool           // -ws-query-token
-	LogLevel       string         // -log-level: debug|info|warn|error
-	DeleteUser     string         // -delete-user <name>: admin subcommand, no server start
+	Addr             string         // -addr
+	PublicOrigin     string         // -public-origin (required; used in signed messages)
+	DB               string         // -db
+	Blobs            string         // -blobs
+	MsgTTL           time.Duration  // -msg-ttl
+	BlobTTL          time.Duration  // -blob-ttl (default MsgTTL + 24h; must be ≥ that)
+	MaxUpload        int64          // -max-upload (bytes)
+	MaxUserBlobs     int            // -max-user-blobs (live attachments per user, as owner or recipient)
+	MaxUserBlobBytes int64          // -max-user-blob-bytes (their total size)
+	MaxEnvelope      int            // -max-envelope (decoded bytes)
+	QueueCap         int            // -queue-cap
+	SenderQueueCap   int            // -sender-queue-cap
+	TrustedProxy     []netip.Prefix // -trusted-proxy (comma-separated CIDR list)
+	WSQueryToken     bool           // -ws-query-token
+	LogLevel         string         // -log-level: debug|info|warn|error
+	DeleteUser       string         // -delete-user <name>: admin subcommand, no server start
 
 	// Version is not a flag: cmd/kilitd/main.go sets it from its ldflags variable so /healthz can
 	// render it without internal/api importing main.
@@ -42,31 +44,35 @@ type Config struct {
 
 // Defaults per §4.8.
 const (
-	DefaultAddr           = ":8080"
-	DefaultDB             = "/data/kilit.db"
-	DefaultBlobs          = "/data/blobs"
-	DefaultMsgTTL         = 168 * time.Hour
-	DefaultMaxUpload      = 8388629 // 8 MiB + 21
-	DefaultMaxEnvelope    = 65536
-	DefaultQueueCap       = 5000
-	DefaultSenderQueueCap = 500
-	DefaultLogLevel       = "info"
-	BlobTTLMargin         = 24 * time.Hour
+	DefaultAddr             = ":8080"
+	DefaultDB               = "/data/kilit.db"
+	DefaultBlobs            = "/data/blobs"
+	DefaultMsgTTL           = 168 * time.Hour
+	DefaultMaxUpload        = 8388629 // 8 MiB + 21
+	DefaultMaxUserBlobs     = 64
+	DefaultMaxUserBlobBytes = 256 << 20
+	DefaultMaxEnvelope      = 65536
+	DefaultQueueCap         = 5000
+	DefaultSenderQueueCap   = 500
+	DefaultLogLevel         = "info"
+	BlobTTLMargin           = 24 * time.Hour
 )
 
 // Default returns the configuration with every default applied and no origin.
 func Default() Config {
 	return Config{
-		Addr:           DefaultAddr,
-		DB:             DefaultDB,
-		Blobs:          DefaultBlobs,
-		MsgTTL:         DefaultMsgTTL,
-		BlobTTL:        DefaultMsgTTL + BlobTTLMargin,
-		MaxUpload:      DefaultMaxUpload,
-		MaxEnvelope:    DefaultMaxEnvelope,
-		QueueCap:       DefaultQueueCap,
-		SenderQueueCap: DefaultSenderQueueCap,
-		LogLevel:       DefaultLogLevel,
+		Addr:             DefaultAddr,
+		DB:               DefaultDB,
+		Blobs:            DefaultBlobs,
+		MsgTTL:           DefaultMsgTTL,
+		BlobTTL:          DefaultMsgTTL + BlobTTLMargin,
+		MaxUpload:        DefaultMaxUpload,
+		MaxUserBlobs:     DefaultMaxUserBlobs,
+		MaxUserBlobBytes: DefaultMaxUserBlobBytes,
+		MaxEnvelope:      DefaultMaxEnvelope,
+		QueueCap:         DefaultQueueCap,
+		SenderQueueCap:   DefaultSenderQueueCap,
+		LogLevel:         DefaultLogLevel,
 	}
 }
 
@@ -155,6 +161,8 @@ func Parse(args []string, getenv func(string) string, stderr io.Writer) (Config,
 	fs.DurationVar(&cfg.MsgTTL, "msg-ttl", cfg.MsgTTL, "queued message TTL")
 	fs.DurationVar(&cfg.BlobTTL, "blob-ttl", cfg.BlobTTL, "attachment TTL (default msg-ttl + 24h; must not be lower)")
 	fs.Int64Var(&cfg.MaxUpload, "max-upload", cfg.MaxUpload, "attachment upload cap in bytes")
+	fs.IntVar(&cfg.MaxUserBlobs, "max-user-blobs", cfg.MaxUserBlobs, "live attachments a user may hold as owner or recipient")
+	fs.Int64Var(&cfg.MaxUserBlobBytes, "max-user-blob-bytes", cfg.MaxUserBlobBytes, "total bytes of those attachments")
 	fs.IntVar(&cfg.MaxEnvelope, "max-envelope", cfg.MaxEnvelope, "decoded envelope cap in bytes")
 	fs.IntVar(&cfg.QueueCap, "queue-cap", cfg.QueueCap, "queued messages per recipient")
 	fs.IntVar(&cfg.SenderQueueCap, "sender-queue-cap", cfg.SenderQueueCap, "queued messages per (sender, recipient)")
@@ -231,6 +239,12 @@ func (c Config) Validate() error {
 	}
 	if c.MaxUpload <= 0 || c.MaxEnvelope <= 0 || c.QueueCap <= 0 || c.SenderQueueCap <= 0 {
 		return errors.New("-max-upload, -max-envelope, -queue-cap and -sender-queue-cap must be positive")
+	}
+	if c.MaxUserBlobs <= 0 || c.MaxUserBlobBytes <= 0 {
+		return errors.New("-max-user-blobs and -max-user-blob-bytes must be positive")
+	}
+	if c.MaxUserBlobBytes < c.MaxUpload {
+		return fmt.Errorf("-max-user-blob-bytes (%d) must be at least -max-upload (%d)", c.MaxUserBlobBytes, c.MaxUpload)
 	}
 	if c.SenderQueueCap > c.QueueCap {
 		return errors.New("-sender-queue-cap must not exceed -queue-cap")

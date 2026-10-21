@@ -18,13 +18,15 @@ const MaxAckIDs = 500
 // bodies before reaching the store).
 var ErrTooManyAckIDs = errors.New("store: too many msg ids")
 
-// NewMessage is the input of InsertMessage.
+// NewMessage is the input of InsertMessage. CreatedAt, when > 0, is stored as created_at (the
+// caller's clock, so a live ws.Delivery can carry the very value the row stores); 0 means now.
 type NewMessage struct {
 	MsgID          []byte
 	SenderID       int64
 	SenderUsername string
 	RecipientID    int64
 	Envelope       []byte
+	CreatedAt      int64
 	ExpiresAt      int64
 }
 
@@ -74,10 +76,14 @@ func (s *Store) InsertMessage(ctx context.Context, m NewMessage) (id int64, exis
 	if fromSender >= s.senderQueueCap {
 		return 0, false, ErrRecipientFull
 	}
+	createdAt := m.CreatedAt
+	if createdAt <= 0 {
+		createdAt = nowFunc()
+	}
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO messages(msg_id, recipient_id, sender_id, sender_username, envelope, created_at, expires_at)
 		 VALUES(?,?,?,?,?,?,?) RETURNING id`,
-		m.MsgID, m.RecipientID, m.SenderID, m.SenderUsername, m.Envelope, nowFunc(), m.ExpiresAt).Scan(&id)
+		m.MsgID, m.RecipientID, m.SenderID, m.SenderUsername, m.Envelope, createdAt, m.ExpiresAt).Scan(&id)
 	if err != nil {
 		return 0, false, mapErr(err)
 	}

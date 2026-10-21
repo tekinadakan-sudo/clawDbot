@@ -106,30 +106,26 @@ func (s *server) handlePutPrekeys(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	uid := si.Session.UserID
+	var spkPtr *store.SignedPrekey
 	if req.SPK != nil {
-		if err := s.st.PutSignedPrekey(ctx, uid, spk); err != nil {
-			if errors.Is(err, store.ErrSPKNotMonotonic) {
-				writeError(w, http.StatusBadRequest, codeSPKNotMonotonic, "spk.id must exceed the current id")
-				return
-			}
-			s.log.Error("put spk", "err", err)
-			writeInternal(w)
-			return
-		}
+		spkPtr = &spk
 	}
-	if len(opks) > 0 {
-		if _, err := s.st.PutOneTimePrekeys(ctx, uid, opks); err != nil {
-			switch {
-			case errors.Is(err, store.ErrOPKExists):
-				writeError(w, http.StatusConflict, codeOPKExists, "one-time prekey id already stored or consumed")
-			case errors.Is(err, store.ErrTooManyOPKs):
-				writeError(w, http.StatusBadRequest, codeTooManyOPKs, "more than 500 one-time prekeys would be stored")
-			default:
-				s.log.Error("put opks", "err", err)
-				writeInternal(w)
-			}
-			return
+	// One transaction for both: a failing OPK batch must not leave the new SPK committed (§4.2
+	// "whole request rejected"), or the client would keep the old SPK while fetchers already see
+	// the new one and a retry of the same rotation would fail with spk_not_monotonic.
+	if err := s.st.PutPrekeys(ctx, uid, spkPtr, opks); err != nil {
+		switch {
+		case errors.Is(err, store.ErrSPKNotMonotonic):
+			writeError(w, http.StatusBadRequest, codeSPKNotMonotonic, "spk.id must exceed the current id")
+		case errors.Is(err, store.ErrOPKExists):
+			writeError(w, http.StatusConflict, codeOPKExists, "one-time prekey id already stored or consumed")
+		case errors.Is(err, store.ErrTooManyOPKs):
+			writeError(w, http.StatusBadRequest, codeTooManyOPKs, "more than 500 one-time prekeys would be stored")
+		default:
+			s.log.Error("put prekeys", "err", err)
+			writeInternal(w)
 		}
+		return
 	}
 	count, spkID, _, err := s.st.PrekeyCount(ctx, uid)
 	if err != nil {
@@ -143,7 +139,8 @@ func (s *server) handlePutPrekeys(w http.ResponseWriter, r *http.Request) {
 	}{count, spkID})
 }
 
-// GET /v1/prekeys/count → {opk_count, spk_id, consumed_ids}.
+// GET /v1/prekeys/count → {opk_count, spk_id, consumed_ids} (the newest store.MaxConsumedIDs
+// consumed ids only; the list is a refill signal, not an archive).
 func (s *server) handlePrekeyCount(w http.ResponseWriter, r *http.Request) {
 	p, _ := authctx.PrincipalFrom(r.Context())
 	count, spkID, consumed, err := s.st.PrekeyCount(r.Context(), p.UserID)

@@ -103,6 +103,13 @@ type env struct {
 
 func newEnv(t *testing.T, modify func(*config.Config), opts store.Options, wsh http.Handler) *env {
 	t.Helper()
+	return newEnvWith(t, modify, opts, wsh, nil)
+}
+
+// newEnvWith additionally lets tweak adjust the server (e.g. its socket deadlines) before the
+// httptest server starts serving.
+func newEnvWith(t *testing.T, modify func(*config.Config), opts store.Options, wsh http.Handler, tweak func(*server)) *env {
+	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.PublicOrigin = testOrigin
@@ -133,6 +140,9 @@ func newEnv(t *testing.T, modify func(*config.Config), opts store.Options, wsh h
 	logs := &syncBuf{}
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	s := newServer(cfg, st, blobs, wsh, nf, clock.Now, logger)
+	if tweak != nil {
+		tweak(s)
+	}
 	srv := httptest.NewServer(s.handler())
 	t.Cleanup(srv.Close)
 	return &env{t: t, srv: srv, st: st, blobs: blobs, blobDir: cfg.Blobs, clock: clock, nf: nf, cfg: cfg, logs: logs, s: s, wsh: wsh}

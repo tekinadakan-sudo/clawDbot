@@ -293,3 +293,25 @@ func TestAttachmentsAndSweep(t *testing.T) {
 		t.Fatal("row survived")
 	}
 }
+
+// InsertMessage stores the caller's CreatedAt (so a live frame can carry the row's ts) and falls
+// back to the store clock when it is absent.
+func TestInsertMessageCreatedAt(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	alice := mkUser(t, s, "alice", 0)
+	bob := mkUser(t, s, "bob", 0)
+	if _, _, err := s.InsertMessage(ctx, NewMessage{MsgID: randBytes(16), SenderID: bob, SenderUsername: "bob", RecipientID: alice, Envelope: []byte("x"), CreatedAt: 1234, ExpiresAt: 1 << 40}); err != nil {
+		t.Fatal(err)
+	}
+	old := nowFunc
+	nowFunc = func() int64 { return 5678 }
+	defer func() { nowFunc = old }()
+	if _, _, err := s.InsertMessage(ctx, NewMessage{MsgID: randBytes(16), SenderID: bob, SenderUsername: "bob", RecipientID: alice, Envelope: []byte("y"), ExpiresAt: 1 << 40}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := s.ListMessages(ctx, alice, 0, 10)
+	if err != nil || len(rows) != 2 || rows[0].CreatedAt != 1234 || rows[1].CreatedAt != 5678 {
+		t.Fatalf("rows %+v %v", rows, err)
+	}
+}

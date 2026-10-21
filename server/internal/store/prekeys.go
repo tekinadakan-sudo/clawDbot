@@ -27,15 +27,47 @@ type Bundle struct {
 	OPK *OneTimePrekey
 }
 
+// MaxConsumedIDs caps the consumed_ids list of PrekeyCount (the newest ids win). The client only
+// needs the list as a refill/grace signal (§3.1), while an attacker forcing claims at the §4.6
+// per-target ceiling could otherwise grow every prekeys_low frame to megabytes within weeks.
+const MaxConsumedIDs = 1000
+
 // PutSignedPrekey stores a new signed prekey. key_id must be greater than the current newest
 // (ErrSPKNotMonotonic); afterwards only the two newest rows of the user are kept. ErrNotFound for
 // an unknown user.
 func (s *Store) PutSignedPrekey(ctx context.Context, userID int64, spk SignedPrekey) error {
+	return s.PutPrekeys(ctx, userID, &spk, nil)
+}
+
+// PutPrekeys is the PUT /v1/prekeys store step: the SPK (when non-nil, monotonic check + insert +
+// prune) and the OPK batch (when non-empty) in ONE immediate transaction, so ErrSPKNotMonotonic,
+// ErrOPKExists and ErrTooManyOPKs each leave nothing committed (§4.2 "whole request rejected").
+// ErrNotFound for an unknown user.
+func (s *Store) PutPrekeys(ctx context.Context, userID int64, spk *SignedPrekey, opks []OneTimePrekey) error {
 	tx, err := s.begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if spk != nil {
+		if err := insertSPK(ctx, tx, userID, *spk); err != nil {
+			return err
+		}
+	}
+	if len(opks) > 0 {
+		if _, err := insertOPKs(ctx, tx, userID, opks); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit: %w", err)
+	}
+	return nil
+}
+
+// insertSPK inserts spk for userID inside tx after the monotonic check and prunes to the two
+// newest rows.
+func insertSPK(ctx context.Context, tx *sql.Tx, userID int64, spk SignedPrekey) error {
 	var current sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT max(key_id) FROM signed_prekeys WHERE user_id=?`, userID).Scan(&current); err != nil {
 		return mapErr(err)
@@ -53,9 +85,6 @@ func (s *Store) PutSignedPrekey(ctx context.Context, userID int64, spk SignedPre
 		   (SELECT key_id FROM signed_prekeys WHERE user_id=? ORDER BY key_id DESC LIMIT 2)`,
 		userID, userID); err != nil {
 		return mapErr(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit: %w", err)
 	}
 	return nil
 }
@@ -163,8 +192,9 @@ func (s *Store) FetchBundle(ctx context.Context, targetID int64, claimOPK bool) 
 	return b, nil
 }
 
-// PrekeyCount returns the stored OPK count, the newest SPK id and the consumed OPK ids still on
-// record (the sweeper drops them after 30 days). ErrNotFound for an unknown user.
+// PrekeyCount returns the stored OPK count, the newest SPK id and the newest MaxConsumedIDs
+// consumed OPK ids still on record (the sweeper drops them after 30 days), oldest claim first.
+// ErrNotFound for an unknown user.
 func (s *Store) PrekeyCount(ctx context.Context, userID int64) (count int, spkID uint32, consumed []uint32, err error) {
 	var exists int
 	if err = s.db.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id=?`, userID).Scan(&exists); err != nil {
@@ -178,7 +208,10 @@ func (s *Store) PrekeyCount(ctx context.Context, userID int64) (count int, spkID
 		return 0, 0, nil, mapErr(err)
 	}
 	spkID = uint32(spk.Int64)
-	rows, err := s.db.QueryContext(ctx, `SELECT key_id FROM consumed_opks WHERE user_id=? ORDER BY claimed_at, key_id`, userID)
+	// Newest first with a LIMIT, then reversed so the wire order stays oldest claim first.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT key_id FROM consumed_opks WHERE user_id=? ORDER BY claimed_at DESC, key_id DESC LIMIT ?`,
+		userID, MaxConsumedIDs)
 	if err != nil {
 		return 0, 0, nil, mapErr(err)
 	}
@@ -193,6 +226,9 @@ func (s *Store) PrekeyCount(ctx context.Context, userID int64) (count int, spkID
 	}
 	if err = rows.Err(); err != nil {
 		return 0, 0, nil, err
+	}
+	for i, j := 0, len(consumed)-1; i < j; i, j = i+1, j-1 {
+		consumed[i], consumed[j] = consumed[j], consumed[i]
 	}
 	return count, spkID, consumed, nil
 }

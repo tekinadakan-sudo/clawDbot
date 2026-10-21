@@ -29,6 +29,8 @@ const (
 	codeBlobExists       = "blob_exists"
 	codeMsgIDConflict    = "msg_id_conflict"
 	codeBodyTooLarge     = "body_too_large"
+	codeRequestTimeout   = "request_timeout"
+	codeAttachmentQuota  = "attachment_quota"
 	codeEnvelopeTooLarge = "envelope_too_large"
 	codeRateLimited      = "rate_limited"
 	codeRecipientFull    = "recipient_full"

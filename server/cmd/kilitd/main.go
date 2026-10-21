@@ -28,8 +28,13 @@ import (
 var version = "dev"
 
 const (
-	sweepEvery        = 60 * time.Second
-	shutdownTimeout   = 10 * time.Second
+	sweepEvery      = 60 * time.Second
+	shutdownTimeout = 10 * time.Second
+	// sweepTimeout bounds one tick from context.Background() rather than the errgroup context: a
+	// SIGTERM must not cancel store calls mid-sweep (spurious errors, abandoned work), yet the
+	// errgroup waits for the sweeper, so the bound stays ≤ shutdownTimeout to keep shutdown inside
+	// docker's stop grace period.
+	sweepTimeout      = shutdownTimeout
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 )
@@ -126,7 +131,9 @@ func run(args []string, getenv func(string) string, stdout, stderr *os.File) int
 			case <-gctx.Done():
 				return nil
 			case <-t.C:
-				sweep(gctx, st, blobs, logger, time.Now().Unix())
+				tctx, cancel := context.WithTimeout(context.Background(), sweepTimeout)
+				sweep(tctx, st, blobs, logger, time.Now().Unix())
+				cancel()
 			}
 		}
 	})

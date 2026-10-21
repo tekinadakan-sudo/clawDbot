@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,6 +186,20 @@ func (e *env) dialRaw(u user) (*websocket.Conn, *http.Response, error) {
 		e.t.Cleanup(func() { c.CloseNow() })
 	}
 	return c, resp, err
+}
+
+// waitLen polls until the hub has exactly n registered connections for uid. websocket.Accept
+// flushes the 101 before the handler registers the connection, so a test that acts on the hub
+// right after dial must wait for the registration explicitly.
+func (e *env) waitLen(uid int64, n int) {
+	e.t.Helper()
+	deadline := time.Now().Add(wait)
+	for e.hub.Len(uid) != n {
+		if time.Now().After(deadline) {
+			e.t.Fatalf("hub has %d connections for user %d, want %d", e.hub.Len(uid), uid, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func (e *env) dial(u user) *client {
@@ -368,6 +383,48 @@ func TestHelloDrainsThenLiveOrdering(t *testing.T) {
 	cl.none(200 * time.Millisecond)
 }
 
+// Concurrent senders: ids are assigned in commit order, and handleSend holds insert + Notify under
+// one lock, so the live frames must arrive in strictly increasing id order with no gap. Without
+// the lock a drop between an inverted pair would lose the lower id for good (the client cursor is
+// the max id seen and the server never redelivers id ≤ after).
+func TestConcurrentSendersLiveOrdering(t *testing.T) {
+	e := newEnv(t, ws.Options{})
+	alice := e.user("alice", 50)
+	const senders, each = 8, 40
+	var peers []user
+	for i := 0; i < senders; i++ {
+		peers = append(peers, e.user(fmt.Sprintf("peer%d", i), 50))
+	}
+	cl := e.dial(alice)
+	cl.hello(0)
+	e.waitLen(alice.id, 1)
+	var wg sync.WaitGroup
+	for _, p := range peers {
+		wg.Add(1)
+		go func(p user) {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				e.send(p, alice)
+			}
+		}(p)
+	}
+	var got []int64
+	for len(got) < senders*each {
+		f := cl.next()
+		if f.T != "msg" {
+			t.Fatalf("unexpected frame %+v", f)
+		}
+		got = append(got, f.ID)
+	}
+	wg.Wait()
+	for i := 1; i < len(got); i++ {
+		if got[i] != got[i-1]+1 {
+			t.Fatalf("ids not contiguous at %d: %v then %v (inversion or gap)", i, got[i-1], got[i])
+		}
+	}
+	cl.none(100 * time.Millisecond)
+}
+
 // A row with id ≤ after is never re-sent, acked or not.
 func TestNoRedeliveryBelowCursor(t *testing.T) {
 	e := newEnv(t, ws.Options{})
@@ -417,7 +474,7 @@ func TestFourthConnectionSupersedesOldest(t *testing.T) {
 		cl := e.dial(alice)
 		cl.hello(0)
 		cls = append(cls, cl)
-		cl.none(50 * time.Millisecond)
+		e.waitLen(alice.id, min(i+1, 3))
 	}
 	cls[0].closedWith(websocket.StatusNormalClosure, "superseded")
 	if n := e.hub.Len(alice.id); n != 3 {
@@ -435,6 +492,7 @@ func TestSlowConsumerCloses1008(t *testing.T) {
 	e := newEnv(t, ws.Options{})
 	alice := e.user("alice", 50)
 	cl := e.dial(alice)
+	e.waitLen(alice.id, 1)
 	// nothing is written before hello, so the queue fills deterministically
 	for i := 1; i <= ws.QueueSize+1; i++ {
 		e.hub.Notify(alice.id, ws.Delivery{ID: int64(i), MsgID: "00", From: "bob", Envelope: []byte("x")})
@@ -505,7 +563,7 @@ func TestFrameFloodPerUserAcrossTwoConnections(t *testing.T) {
 	a.hello(0)
 	b := e.dial(alice)
 	b.hello(0)
-	a.none(50 * time.Millisecond)
+	e.waitLen(alice.id, 2)
 	// Drain the shared bucket through the first connection and wait for all
 	// 30 pongs before the second connection sends anything, so which
 	// connection trips the per-user limit is deterministic.
@@ -624,7 +682,8 @@ func TestPrekeysLowOnConnectAndViaNotifier(t *testing.T) {
 
 	cl2 := e.dial(fine)
 	cl2.hello(0)
-	cl2.none(200 * time.Millisecond)
+	e.waitLen(fine.id, 1)
+	cl2.none(100 * time.Millisecond)
 	e.hub.PrekeysLow(fine.id, 3, []uint32{7, 9})
 	f = cl2.next()
 	if f.T != "prekeys_low" || f.OPKCount != 3 || len(f.ConsumedIDs) != 2 || f.ConsumedIDs[0] != 7 || f.ConsumedIDs[1] != 9 {
@@ -640,7 +699,7 @@ func TestGracefulCloseIs1001(t *testing.T) {
 	alice := e.user("alice", 50)
 	cl := e.dial(alice)
 	cl.hello(0)
-	cl.none(50 * time.Millisecond)
+	e.waitLen(alice.id, 1)
 	e.hub.CloseAll()
 	cl.closedWith(websocket.StatusGoingAway, "server shutting down")
 	done := make(chan struct{})

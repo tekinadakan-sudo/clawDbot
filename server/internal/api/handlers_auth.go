@@ -63,7 +63,9 @@ func (s *server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	}{exp, b64s(nonce), now})
 }
 
-// POST /v1/auth/login: {username, nonce, ts, device_id, sig} → {token, expires_at}.
+// POST /v1/auth/login: {username, nonce, ts, device_id, sig} → {token, expires_at}. Unlike the
+// generic §4.3.1 table, an unknown user or a bad signature here is 401 (login row of §4.3.2, §4.5):
+// the client returns to onboarding on a persistent 401 unknown_user/bad_signature.
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -115,7 +117,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	u, err := s.st.GetUserByName(r.Context(), username)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, codeUnknownUser, "unknown user")
+			writeError(w, http.StatusUnauthorized, codeUnknownUser, "unknown user")
 			return
 		}
 		s.log.Error("get user", "err", err)
@@ -124,7 +126,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := auth.LoginMessage(username, nonce, uint64(req.TS), req.DeviceID, s.origin)
 	if err := auth.Verify(u.IdentitySignPub, msg, sig); err != nil {
-		writeError(w, http.StatusBadRequest, codeBadSignature, "login_sig does not verify")
+		writeError(w, http.StatusUnauthorized, codeBadSignature, "login_sig does not verify")
 		return
 	}
 	token, hash, err := auth.NewToken()
