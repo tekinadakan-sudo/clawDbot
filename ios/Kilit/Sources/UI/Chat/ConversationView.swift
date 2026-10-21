@@ -242,16 +242,16 @@ struct ConversationView: View {
     private var messageList: some View {
         List {
             ForEach(conv.messages) { message in
-                MessageRow(message: message, peer: peer,
-                           isGap: conv.gapIds.contains(message.id),
-                           isDimmed: conv.dimmedIds.contains(message.id),
-                           flickerEnabled: model.settings.flicker,
-                           onOpenImage: { m in conv.viewerMessage = m },
-                           onDeleteForMe: { m in Task { await conv.deleteForMe(m, model) } },
-                           onDeleteForBoth: { m in Task { await conv.deleteForBoth(m, model) } })
+                MessageRowView(message: message, peer: peer,
+                               isGap: conv.gapIds.contains(message.id),
+                               isDimmed: conv.dimmedIds.contains(message.id),
+                               flickerEnabled: model.settings.flicker,
+                               onOpenImage: { m in conv.viewerMessage = m },
+                               onDeleteForMe: { m in Task { await conv.deleteForMe(m, model) } },
+                               onDeleteForBoth: { m in Task { await conv.deleteForBoth(m, model) } })
             }
             if conv.messages.isEmpty {
-                Text(String(localized: "capture.none", defaultValue: "Bildirilen ekran görüntüsü yok"))
+                Text(String(localized: "conversation.empty", defaultValue: "Henüz mesaj yok"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)

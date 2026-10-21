@@ -29,7 +29,7 @@ enum TimerOptions {
     }
 }
 
-struct MessageRow: View {
+struct MessageRowView: View {
     let message: Message
     let peer: String
     let isGap: Bool
@@ -126,10 +126,10 @@ struct MessageRow: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                 }
-                .pressHold(handlePress)
+                .pressHold { handlePress($0) }
         } else {
             placeholder(fill: fill)
-                .pressHold(handlePress)
+                .pressHold { handlePress($0) }
         }
     }
 
@@ -161,7 +161,7 @@ struct MessageRow: View {
 
     private var metadata: some View {
         HStack(spacing: 6) {
-            Text(MessageRow.time(message.ts))
+            Text(MessageRowView.time(message.ts))
             if message.author == .me {
                 switch message.state {
                 case .outbox:

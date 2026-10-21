@@ -38,8 +38,8 @@ final class RevealController {
     /// The single revealed message id, or nil.
     private(set) var revealedID: String?
 
-    @ObservationIgnored let autoEndInterval: TimeInterval
-    @ObservationIgnored private let now: () -> Date
+    let autoEndInterval: TimeInterval
+    private let now: () -> Date
     @ObservationIgnored private var startedAt: Date?
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored var haptic: @MainActor () -> Void

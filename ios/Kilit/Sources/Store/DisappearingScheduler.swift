@@ -85,7 +85,7 @@ final class DisappearingScheduler {
     }
 
     /// Messages whose deadline has passed, earliest deadline first (purge order), ties by id.
-    static func expired(_ messages: [Message], now: UInt64) -> [Message] {
+    nonisolated static func expired(_ messages: [Message], now: UInt64) -> [Message] {
         messages.filter { m in
             guard let e = m.expiresAt else { return false }
             return e <= now
@@ -97,7 +97,7 @@ final class DisappearingScheduler {
         }
     }
 
-    static func earliestDeadline(_ messages: [Message]) -> UInt64? {
+    nonisolated static func earliestDeadline(_ messages: [Message]) -> UInt64? {
         messages.compactMap { $0.expiresAt }.min()
     }
 

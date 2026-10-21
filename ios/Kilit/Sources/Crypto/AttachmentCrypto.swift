@@ -102,12 +102,14 @@ enum AttachmentCrypto {
     }
 
     /// Opens a blob file into an owned buffer; the receiver must find exactly `len` bytes.
-    /// Throws `badHeader` for a wrong magic/version, `CryptoKitError.authenticationFailure` otherwise.
+    /// Go `OpenAttachment` order: a `fileKey` that is not 32 bytes → `badKeyLength`; a blob shorter than
+    /// 21 bytes or without the `KATT 0x01` header, and every AEAD/length failure →
+    /// `CryptoKitError.authenticationFailure`.
     static func open(blob: Data, fileKey: Data, blobId: Data, mime: String, len: UInt64) throws -> OwnedPlaintextBuffer {
-        guard blob.count >= headerLength + AEAD.tagLength else { throw KilitCryptoError.badHeader }
+        guard fileKey.count == 32 else { throw KilitCryptoError.badKeyLength }
+        guard blob.count >= headerLength + AEAD.tagLength else { throw CryptoKitError.authenticationFailure }
         let header: Data = Bytes.copy(blob.prefix(headerLength))
-        guard header.prefix(4) == magic, header[4] == version else { throw KilitCryptoError.badHeader }
-        guard fileKey.count == 32 else { throw CryptoKitError.incorrectKeySize }
+        guard header.prefix(4) == magic, header[4] == version else { throw CryptoKitError.authenticationFailure }
         let wire: Data = Bytes.copy(blob.suffix(blob.count - headerLength))
         let (key, nonce) = deriveKeys(fileKey: fileKey)
         let pt: Data = try AEAD.open(wire: wire, key: key, nonce: nonce, aad: aad(blobId: blobId, mime: mime, len: len))

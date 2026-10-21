@@ -110,13 +110,12 @@ enum X3DH {
     }
 
     /// Bob's mirror of the DHs for a `prekey` envelope from `from`. The caller has already resolved
-    /// `spk`/`opk` by id (`spk_gone`/`opk_gone` otherwise). Verifies the 32-byte lengths and `ik_bind_sig`.
+    /// `spk`/`opk` by id (`spk_gone`/`opk_gone` otherwise). Verifies the identity binding in Go's order
+    /// (`ik_sig` import check, `ik_dh` length, `ik_bind_sig`) and the `ek` length.
     static func respond(x3dh: X3DHBlock, from: String, local: IdentityKeys, localUsername: String,
                         spk: SignedPrekey, opk: OneTimePrekey?) throws -> X3DHResult {
-        guard x3dh.ikSig.count == 32, x3dh.ikDh.count == 32, x3dh.ek.count == 32 else {
-            throw KilitCryptoError.badKeyLength
-        }
-        try Ed25519Strict.verify(signature: x3dh.ikBindSig, message: SignedMessages.ikBind(ikDh: x3dh.ikDh), publicKey: x3dh.ikSig)
+        try BundleVerifier.verifyIdentityBinding(x3dh.identity, ikBindSig: x3dh.ikBindSig)
+        guard x3dh.ek.count == 32 else { throw KilitCryptoError.badKeyLength }
         let spkPriv: Curve25519.KeyAgreement.PrivateKey = try spk.privateKey.x25519PrivateKey()
         let dh1: Data = try dh(spkPriv, x3dh.ikDh)
         let dh2: Data = try dh(local.agreement, x3dh.ek)

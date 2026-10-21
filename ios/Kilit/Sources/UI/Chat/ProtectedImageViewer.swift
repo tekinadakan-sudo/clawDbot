@@ -40,7 +40,8 @@ struct ProtectedImageViewer: View {
             Color(uiColor: CaptureProtectedImageView.letterbox).ignoresSafeArea()
             SecureContainer(mode: model.secureLayerMode,
                             enabled: model.settings.secureLayer,
-                            hidesFromAssistiveTechnologies: model.settings.accessibilityHide) {
+                            hidesFromAssistiveTechnologies: model.settings.accessibilityHide,
+                            onProtectionChange: nil) {
                 GeometryReader { proxy in
                     ZStack {
                         ProtectedImageHost(image: image,

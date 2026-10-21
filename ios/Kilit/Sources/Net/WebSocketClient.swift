@@ -105,6 +105,9 @@ actor WebSocketClient {
     private(set) var pollStarted: Bool = false
 
     private var loop: Task<Void, Never>?
+    /// Bumped by `start()`/`stop()`; a `runLoop` that outlives its generation skips its trailing teardown so it
+    /// cannot cancel a newer loop's poll fallback or publish `.stopped` over that loop's state.
+    private var loopGeneration: Int = 0
     private var pollLoop: Task<Void, Never>?
     private var current: WebSocketTask?
 
@@ -137,12 +140,15 @@ actor WebSocketClient {
 
     func start() {
         guard loop == nil else { return }
+        loopGeneration += 1
+        let generation: Int = loopGeneration
         loop = Task { [weak self] in
-            await self?.runLoop()
+            await self?.runLoop(generation: generation)
         }
     }
 
     func stop() {
+        loopGeneration += 1
         loop?.cancel()
         loop = nil
         stopPolling()
@@ -153,7 +159,8 @@ actor WebSocketClient {
 
     /// Reconnect loop: attempt → on failure (or drop) back off 1–30 s with the poll fallback running.
     /// Exposed so tests can drive it directly with a stubbed sleeper that ends the loop by throwing.
-    func runLoop() async {
+    /// `generation` (set by `start()`) lets a superseded loop exit without touching the newer loop's state.
+    func runLoop(generation: Int? = nil) async {
         while !Task.isCancelled {
             setState(.connecting)
             let wentLive: Bool = await attempt()
@@ -169,6 +176,7 @@ actor WebSocketClient {
                 break
             }
         }
+        if let g = generation, g != loopGeneration { return }
         stopPolling()
         setState(.stopped)
     }

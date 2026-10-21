@@ -26,7 +26,7 @@ protocol CaptureGlueSink: AnyObject {
 @MainActor
 final class CaptureGlue {
 
-    static let coalesceWindow: UInt64 = ControlCoalescer.captureWindow
+    nonisolated static let coalesceWindow: UInt64 = ControlCoalescer.captureWindow
 
     private let clock: KilitClock
     private let sink: CaptureGlueSink
@@ -55,11 +55,11 @@ final class CaptureGlue {
     // MARK: - Conversions (§3.4)
 
     /// Wire spelling → kind; nil for an unknown spelling (Diagnostics logs it, no row renders).
-    static func wireKind(_ raw: String) -> CaptureEventKind? {
+    nonisolated static func wireKind(_ raw: String) -> CaptureEventKind? {
         CaptureEventKind(rawValue: raw)
     }
 
-    static func wireString(_ kind: CaptureEventKind) -> String {
+    nonisolated static func wireString(_ kind: CaptureEventKind) -> String {
         kind.rawValue
     }
 
@@ -120,13 +120,13 @@ final class CaptureGlue {
 
     /// A peer report whose `seq_from` skips past the highest `seq_to` seen so far
     /// renders "Bildirilmeyen olay". `blanking_unavailable` (no counters) never does.
-    static func hasGap(lastPeerCaptureSeq: UInt32?, seqFrom: UInt32?) -> Bool {
+    nonisolated static func hasGap(lastPeerCaptureSeq: UInt32?, seqFrom: UInt32?) -> Bool {
         guard let from = seqFrom else { return false }
         return from > (lastPeerCaptureSeq ?? 0) &+ 1
     }
 
     /// Ids of the peer capture rows (in local order) preceded by a gap.
-    static func gapRowIds(_ messages: [Message]) -> Set<String> {
+    nonisolated static func gapRowIds(_ messages: [Message]) -> Set<String> {
         var highest: UInt32? = nil
         var gaps: Set<String> = []
         for m in messages where m.kind == .capture && m.author == .peer {

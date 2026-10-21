@@ -20,16 +20,18 @@ struct IdentityPublicKeys: Codable, Equatable {
 
 /// Username canonical form `^[a-z0-9_]{3,32}$` and the lowercase UUIDv4 `device_id` rule of §3.
 enum Canonical {
-    /// Lowercases ASCII letters; returns nil when the result does not match `^[a-z0-9_]{3,32}$`.
+    /// Lowercases ASCII letters only (mirrors the server's `auth.CanonicalUsername`, which never applies
+    /// Unicode case mapping); returns nil when the result does not match `^[a-z0-9_]{3,32}$`.
     static func username(_ raw: String) -> String? {
-        let lowered: String = raw.lowercased()
-        let bytes: [UInt8] = Array(lowered.utf8)
+        let bytes: [UInt8] = Array(raw.utf8).map { (b: UInt8) -> UInt8 in
+            (b >= 0x41 && b <= 0x5A) ? b + 0x20 : b
+        }
         guard bytes.count >= 3, bytes.count <= 32 else { return nil }
         for b in bytes {
             let ok: Bool = (b >= 0x61 && b <= 0x7A) || (b >= 0x30 && b <= 0x39) || b == 0x5F
             if !ok { return nil }
         }
-        return lowered
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     static func isDeviceId(_ s: String) -> Bool {
@@ -137,23 +139,29 @@ enum Ed25519Strict {
         return false
     }
 
-    /// Imports a public key: 32 bytes, not small-order, accepted by CryptoKit; otherwise `badPublicKey`.
+    /// Import-time check (Go `CheckEd25519PublicKey`): not 32 bytes → `badKeyLength`; a small-order
+    /// encoding or a key CryptoKit refuses → `badPublicKey`.
     static func publicKey(_ raw: Data) throws -> Curve25519.Signing.PublicKey {
-        guard raw.count == 32, !isSmallOrder(raw) else { throw KilitCryptoError.badPublicKey }
+        guard raw.count == 32 else { throw KilitCryptoError.badKeyLength }
+        guard !isSmallOrder(raw) else { throw KilitCryptoError.badPublicKey }
         guard let pk = try? Curve25519.Signing.PublicKey(rawRepresentation: raw) else {
             throw KilitCryptoError.badPublicKey
         }
         return pk
     }
 
-    /// Full strict verification; throws `badSignature` (or `badPublicKey` for a bad key).
+    /// Full strict verification in the order of Go `Verify`: public key not 32 bytes → `badKeyLength`;
+    /// signature length, `S < L`, small-order `A` or `R`, and the library verify → `badSignature`.
     static func verify(signature: Data, message: Data, publicKey raw: Data) throws {
-        let pk: Curve25519.Signing.PublicKey = try publicKey(raw)
+        guard raw.count == 32 else { throw KilitCryptoError.badKeyLength }
         guard signature.count == 64 else { throw KilitCryptoError.badSignature }
         let r: Data = Bytes.copy(signature.prefix(32))
         let s: Data = Bytes.copy(signature.suffix(32))
         guard scalarIsCanonical(s) else { throw KilitCryptoError.badSignature }
-        guard !isSmallOrder(r) else { throw KilitCryptoError.badSignature }
+        guard !isSmallOrder(raw), !isSmallOrder(r) else { throw KilitCryptoError.badSignature }
+        guard let pk = try? Curve25519.Signing.PublicKey(rawRepresentation: raw) else {
+            throw KilitCryptoError.badSignature
+        }
         guard pk.isValidSignature(signature, for: message) else { throw KilitCryptoError.badSignature }
     }
 }
@@ -284,16 +292,25 @@ enum SignedMessages {
     }
 }
 
-/// Bundle verification performed by clients on fetch (§3.1): `ik_bind_sig` and `spk.sig`.
+/// Bundle verification performed by clients on fetch (§3.1), in the order of Go `VerifyBundle`:
+/// identity binding (`ik_sig` import check, `ik_dh` length, `ik_bind_sig`), `spk.pub` length, `spk.sig`,
+/// `opk.pub` length. SPK staleness is checked afterwards by `X3DH.initiate`.
 enum BundleVerifier {
+    /// Go `VerifyIdentityBinding`: shared by the bundle check and the `prekey` envelope path.
+    static func verifyIdentityBinding(_ identity: IdentityPublicKeys, ikBindSig: Data) throws {
+        _ = try Ed25519Strict.publicKey(identity.ikSig)
+        guard identity.ikDh.count == 32 else { throw KilitCryptoError.badKeyLength }
+        try Ed25519Strict.verify(signature: ikBindSig,
+                                 message: SignedMessages.ikBind(ikDh: identity.ikDh),
+                                 publicKey: identity.ikSig)
+    }
+
     static func verify(_ bundle: PrekeyBundle) throws {
-        guard bundle.identity.isWellFormed, bundle.spk.pub.count == 32 else { throw KilitCryptoError.badKeyLength }
-        if let opk = bundle.opkPub, opk.count != 32 { throw KilitCryptoError.badKeyLength }
-        try Ed25519Strict.verify(signature: bundle.ikBindSig,
-                                 message: SignedMessages.ikBind(ikDh: bundle.identity.ikDh),
-                                 publicKey: bundle.identity.ikSig)
+        try verifyIdentityBinding(bundle.identity, ikBindSig: bundle.ikBindSig)
+        guard bundle.spk.pub.count == 32 else { throw KilitCryptoError.badKeyLength }
         try Ed25519Strict.verify(signature: bundle.spk.sig,
                                  message: SignedMessages.spk(id: bundle.spk.id, createdAt: bundle.spk.createdAt, pub: bundle.spk.pub),
                                  publicKey: bundle.identity.ikSig)
+        if let opk = bundle.opkPub, opk.count != 32 { throw KilitCryptoError.badKeyLength }
     }
 }

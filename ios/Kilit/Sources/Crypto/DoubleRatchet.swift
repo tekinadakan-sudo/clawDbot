@@ -73,7 +73,7 @@ enum DoubleRatchet {
 
     /// `RatchetEncrypt`; `plaintext` is the padded block. The caller persists `state` before the wire leaves.
     static func encrypt(state: inout RatchetState, plaintext: Data, ad: Data, sid: Data) throws -> RatchetEncryption {
-        guard let cks = state.cks else { throw KilitCryptoError.unknownSession }
+        guard let cks = state.cks else { throw KilitCryptoError.noSendingChain }
         let (nextCK, mk) = KDF.kdfCK(ck: cks)
         let header: MessageHeader = MessageHeader(dhPub: state.dhsPub, pn: state.pn, n: state.ns)
         let aad: Data = concat(ad: ad, sid: sid, header: header.bytes)
@@ -116,7 +116,7 @@ enum DoubleRatchet {
     /// `SkipMessageKeys`: `Nr + MAX_SKIP < until` → `tooManySkipped`; stores the skipped keys with one
     /// `insertedAt` per call and runs the eviction.
     static func skipMessageKeys(_ s: inout RatchetState, until: UInt32, now: UInt64) throws {
-        if s.nr &+ RatchetState.maxSkip < until { throw KilitCryptoError.tooManySkipped }
+        if UInt64(s.nr) + UInt64(RatchetState.maxSkip) < UInt64(until) { throw KilitCryptoError.tooManySkipped }
         guard var ckr = s.ckr, let dhr = s.dhr else { return }
         var entries: [SkippedKey] = []
         while s.nr < until {

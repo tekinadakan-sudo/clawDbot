@@ -25,7 +25,7 @@ final class CaptureMonitor {
     /// Event sink. The timestamp comes from the injected clock.
     @ObservationIgnored var onEvent: ((CaptureEventKind, _ timestamp: Date) -> Void)?
 
-    @ObservationIgnored private let now: () -> Date
+    private let now: () -> Date
     @ObservationIgnored private var screenshotObserver: NotificationObserverToken?
     @ObservationIgnored private var lastScreenshotAt: Date?
 

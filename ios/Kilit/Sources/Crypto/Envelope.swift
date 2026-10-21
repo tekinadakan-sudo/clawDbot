@@ -149,8 +149,11 @@ struct OuterEnvelope: Codable, Equatable {
         try c.encodeB64(ct, forKey: .ct)
     }
 
+    /// Encodes with the §3 conventions; `sizeLimit` when the result exceeds `EnvelopeParser.maxEnvelope`.
     func encoded() throws -> Data {
-        try KilitJSON.encoder().encode(self)
+        let bytes: Data = try KilitJSON.encoder().encode(self)
+        guard bytes.count <= EnvelopeParser.maxEnvelope else { throw KilitCryptoError.sizeLimit }
+        return bytes
     }
 }
 
@@ -163,10 +166,14 @@ struct ParsedEnvelope: Equatable {
 }
 
 enum EnvelopeParser {
-    /// Everything that is rejected before any KDF: `v != 1`, unknown `kind`, bad `sid`, `hdr` not 41 bytes
-    /// or version byte != 0x01 (`KilitCryptoError.badHeader`), `ct` shorter than 272 bytes, a `prekey`
-    /// without `x3dh`.
+    /// Largest accepted (and produced) envelope encoding in bytes (Go `MaxEnvelope`).
+    static let maxEnvelope: Int = 65536
+
+    /// Everything that is rejected before any KDF: an encoding over `maxEnvelope`, `v != 1`, unknown `kind`,
+    /// bad `sid`, `hdr` not 41 bytes or version byte != 0x01 (`KilitCryptoError.badHeader`), `ct` shorter
+    /// than 272 bytes, a `prekey` without `x3dh`, a `msg` with one.
     static func parse(_ bytes: Data) throws -> ParsedEnvelope {
+        guard bytes.count <= maxEnvelope else { throw EnvelopeError.badEnvelope("size") }
         let outer: OuterEnvelope
         do {
             outer = try KilitJSON.decoder().decode(OuterEnvelope.self, from: bytes)
@@ -188,7 +195,7 @@ enum EnvelopeParser {
             guard x.ek.count == 32 else { throw EnvelopeError.badEnvelope("ek") }
             sid = X3DH.sid(ek: x.ek)
         case .msg:
-            break
+            guard outer.x3dh == nil else { throw EnvelopeError.badEnvelope("x3dh") }
         }
         return ParsedEnvelope(outer: outer, header: header, sid: sid)
     }
@@ -264,6 +271,8 @@ struct InnerAttachment: Codable, Equatable {
 }
 
 /// Inner plaintext JSON. Optional fields: absent and `null` are equivalent on decode; encode omits nil.
+/// Only `t` and `id` are required on decode (Go `DecodeInner`): an absent, `null` or negative `ts`/`ttl`
+/// decodes as 0, and a malformed `lost_sid` is kept as text and simply yields no `lostSid`.
 struct InnerMessage: Codable, Equatable {
     var t: String
     var id: String
@@ -278,7 +287,17 @@ struct InnerMessage: Codable, Equatable {
     /// `ctrl.capture` kind: one of `CaptureKindWire`; a plain String by design (§3.4).
     var kind: String?
     var ref: [String]?
-    var lostSid: Data?
+    /// `lost_sid` exactly as carried on the wire (base64url text), decoded lazily by `lostSid`.
+    var lostSidRaw: String?
+
+    /// The 8-byte `lost_sid` of a `ctrl.resync`, nil when absent or malformed (the resync is then skipped).
+    var lostSid: Data? {
+        get {
+            guard let raw = lostSidRaw, let d = Data(base64url: raw), d.count == 8 else { return nil }
+            return d
+        }
+        set { lostSidRaw = newValue?.base64url() }
+    }
 
     enum CodingKeys: String, CodingKey {
         case t, id, ts, ttl, text, att, timer
@@ -303,15 +322,18 @@ struct InnerMessage: Codable, Equatable {
         self.count = count
         self.kind = kind
         self.ref = ref
-        self.lostSid = lostSid
+        self.lostSidRaw = lostSid?.base64url()
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         t = try c.decode(String.self, forKey: .t)
         id = try c.decode(String.self, forKey: .id)
-        ts = try c.decode(UInt64.self, forKey: .ts)
-        ttl = try c.decode(UInt32.self, forKey: .ttl)
+        guard !t.isEmpty, !id.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .t, in: c, debugDescription: "empty t or id")
+        }
+        ts = try InnerMessage.decodeNonNegative(c, .ts, as: UInt64.self)
+        ttl = try InnerMessage.decodeNonNegative(c, .ttl, as: UInt32.self)
         text = try c.decodeIfPresent(String.self, forKey: .text)
         att = try c.decodeIfPresent(InnerAttachment.self, forKey: .att)
         timer = try c.decodeIfPresent(UInt32.self, forKey: .timer)
@@ -320,7 +342,18 @@ struct InnerMessage: Codable, Equatable {
         count = try c.decodeIfPresent(UInt32.self, forKey: .count)
         kind = try c.decodeIfPresent(String.self, forKey: .kind)
         ref = try c.decodeIfPresent([String].self, forKey: .ref)
-        lostSid = try c.decodeB64IfPresent(.lostSid)
+        lostSidRaw = try c.decodeIfPresent(String.self, forKey: .lostSid)
+    }
+
+    /// Go tolerance for `ts` (int64) and `ttl` (int): absent/`null` → 0, a negative integer → 0,
+    /// a non-integer → `DecodingError`.
+    private static func decodeNonNegative<T: FixedWidthInteger & Decodable>(
+        _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys, as _: T.Type
+    ) throws -> T {
+        if let v = try? c.decodeIfPresent(T.self, forKey: key) { return v }
+        let signed: Int64 = try c.decodeIfPresent(Int64.self, forKey: key) ?? 0
+        guard signed > 0, let v = T(exactly: signed) else { return 0 }
+        return v
     }
 
     func encode(to encoder: Encoder) throws {
@@ -337,7 +370,7 @@ struct InnerMessage: Codable, Equatable {
         try c.encodeIfPresent(count, forKey: .count)
         try c.encodeIfPresent(kind, forKey: .kind)
         try c.encodeIfPresent(ref, forKey: .ref)
-        try c.encodeB64IfPresent(lostSid, forKey: .lostSid)
+        try c.encodeIfPresent(lostSidRaw, forKey: .lostSid)
     }
 
     static func text(id: String, ts: UInt64, ttl: UInt32, text: String) -> InnerMessage {

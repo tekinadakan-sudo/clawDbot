@@ -27,6 +27,8 @@ enum KilitCryptoError: Error, Equatable {
     case sizeLimit
     /// No session with the given sid.
     case unknownSession
+    /// `RatchetEncrypt` on a responder state before the first peer message was decrypted (`CKs` absent).
+    case noSendingChain
 
     /// The vector-file spelling of the case.
     var vectorName: String {
@@ -43,6 +45,7 @@ enum KilitCryptoError: Error, Equatable {
         case .badPadding: return "badPadding"
         case .sizeLimit: return "sizeLimit"
         case .unknownSession: return "unknownSession"
+        case .noSendingChain: return "noSendingChain"
         }
     }
 }
