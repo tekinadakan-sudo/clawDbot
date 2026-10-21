@@ -1,0 +1,3 @@
+kilit.example.com {
+    reverse_proxy kilitd:8080
+}

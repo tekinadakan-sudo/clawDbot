@@ -1,0 +1,7 @@
+# Keep dev databases, blobs, stale binaries and tests out of the build context (design §4.9).
+dev.db*
+blobs/
+data/
+kilitd
+*_test.go
+.git

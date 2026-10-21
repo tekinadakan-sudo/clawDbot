@@ -1,0 +1,49 @@
+# Run everything from this directory: cd server && docker compose up -d --build  (design §4.9).
+# Prerequisites: DNS A/AAAA for the domain → this host, ports 80/443 open (ACME),
+# mkdir -p data && sudo chown 65532:65532 data   (distroless nonroot uid), /data on a local disk.
+services:
+  kilitd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "${VERSION:-dev}"
+    restart: unless-stopped
+    environment:
+      KILIT_PUBLIC_ORIGIN: https://kilit.example.com
+      KILIT_TRUSTED_PROXY: 172.28.0.0/16
+    volumes:
+      - ./data:/data
+    networks:
+      - kilitnet
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - kilitnet
+    depends_on:
+      - kilitd
+
+networks:
+  kilitnet:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
